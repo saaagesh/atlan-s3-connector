@@ -1,0 +1,9 @@
+boto3
+pandas
+python-dotenv
+google-generativeai
+pyatlan
+pytest
+pytest-asyncio
+moto
+pytest-mock
