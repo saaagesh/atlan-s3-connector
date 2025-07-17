@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Atlan AI Column Enhancer</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <div class="left-pane">
+            <header>
+                <h1>Atlan AI Enhancer</h1>
+            </header>
+            
+            <div class="filter-group">
+                <label for="source-select">1. Select Source</label>
+                <select id="source-select">
+                    <option value="">-- Choose a source --</option>
+                    <option value="postgres-sk">PostgreSQL</option>
+                    <option value="aws-s3-connection-sk">AWS S3</option>
+                    <option value="snowflake-sk">Snowflake</option>
+                </select>
+            </div>
+
+            <div id="asset-filter-group" class="filter-group hidden">
+                <label for="asset-select">2. Select Asset / Table</label>
+                <select id="asset-select"></select>
+            </div>
+        </div>
+
+        <div class="right-pane">
+            <div id="right-pane-content">
+                <p>Please select a source from the left pane to get started.</p>
+            </div>
+            <div id="loader" class="spinner hidden"></div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const sourceSelect = document.getElementById('source-select');
+            const assetFilterGroup = document.getElementById('asset-filter-group');
+            const assetSelect = document.getElementById('asset-select');
+            const rightPaneContent = document.getElementById('right-pane-content');
+            const loader = document.getElementById('loader');
+
+            let assets = [];
+            let currentColumns = [];
+
+            // Fetch assets when a source is selected
+            sourceSelect.addEventListener('change', async () => {
+                const sourceName = sourceSelect.value;
+                if (!sourceName) {
+                    assetFilterGroup.classList.add('hidden');
+                    return;
+                }
+
+                rightPaneContent.innerHTML = '';
+                loader.classList.remove('hidden');
+                assetFilterGroup.classList.add('hidden');
+
+                try {
+                    const response = await fetch('/api/assets_by_source', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ source: sourceName })
+                    });
+                    const data = await response.json();
+
+                    if (data.success) {
+                        assets = data.assets;
+                        assetSelect.innerHTML = '<option value="">-- Select asset/table --</option>';
+                        assets.forEach((asset, index) => {
+                            const option = document.createElement('option');
+                            option.value = index;
+                            option.textContent = asset.name;
+                            assetSelect.appendChild(option);
+                        });
+                        assetFilterGroup.classList.remove('hidden');
+                    } else {
+                        handleError(data.error);
+                    }
+                } catch (error) {
+                    handleError(error.message);
+                } finally {
+                    loader.classList.add('hidden');
+                }
+            });
+
+            // Fetch columns when an asset is selected
+            assetSelect.addEventListener('change', async () => {
+                const assetIndex = assetSelect.value;
+                if (assetIndex === '') return;
+
+                const asset = assets[assetIndex];
+                rightPaneContent.innerHTML = '';
+                loader.classList.remove('hidden');
+
+                try {
+                    const response = await fetch('/api/columns', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ asset_qualified_name: asset.qualified_name, source_type: asset.type })
+                    });
+                    const data = await response.json();
+                    if (data.success) {
+                        currentColumns = data.columns;
+                        renderColumns(asset.name, currentColumns);
+                    } else {
+                        handleError(data.error);
+                    }
+                } catch (error) {
+                    handleError(error.message);
+                } finally {
+                    loader.classList.add('hidden');
+                }
+            });
+
+            function renderColumns(assetName, columns) {
+                if (columns.length === 0) {
+                    rightPaneContent.innerHTML = `<h2>No columns found for ${assetName}.</h2>`;
+                    return;
+                }
+
+                let columnsHtml = columns.map((col, index) => `
+                    <li class="column-item" data-index="${index}">
+                        <div class="column-info">
+                            <strong>${col.name}</strong>
+                            <p class="description">${col.description || 'No description available.'}</p>
+                        </div>
+                        <div class="column-actions">
+                            <button class="generate-one-btn">Generate</button>
+                        </div>
+                    </li>
+                `).join('');
+
+                rightPaneContent.innerHTML = `
+                    <h2>Columns for ${assetName}</h2>
+                    <button id="generate-all-btn">Generate for All Columns</button>
+                    <ul class="column-list">${columnsHtml}</ul>
+                    <button id="save-to-atlan-btn" class="hidden">Save Descriptions to Atlan</button>
+                `;
+            }
+            
+            // Event delegation for dynamically created buttons
+            rightPaneContent.addEventListener('click', async (e) => {
+                const assetIndex = assetSelect.value;
+                const asset = assets[assetIndex];
+
+                if (e.target.classList.contains('generate-one-btn')) {
+                    const columnIndex = e.target.closest('.column-item').dataset.index;
+                    e.target.textContent = 'Generating...';
+                    e.target.disabled = true;
+                    await generateDescriptions(asset, [currentColumns[columnIndex]], [e.target.closest('.column-item')]);
+                    e.target.textContent = 'Generate';
+                    e.target.disabled = false;
+                }
+                if (e.target.id === 'generate-all-btn') {
+                    const allItems = rightPaneContent.querySelectorAll('.column-item');
+                    e.target.textContent = 'Generating...';
+                    e.target.disabled = true;
+                    await generateDescriptions(asset, currentColumns, allItems);
+                    e.target.textContent = 'Generate for All Columns';
+                    e.target.disabled = false;
+                }
+                if (e.target.id === 'save-to-atlan-btn') {
+                    e.target.textContent = 'Saving...';
+                    e.target.disabled = true;
+                    await saveToAtlan(asset, currentColumns);
+                    e.target.textContent = 'Save Descriptions to Atlan';
+                    e.target.disabled = false;
+                }
+            });
+
+            async function generateDescriptions(asset, columnsToEnhance, listItems) {
+                try {
+                    const response = await fetch('/api/enhance_columns', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            asset_qualified_name: asset.qualified_name,
+                            columns: columnsToEnhance 
+                        })
+                    });
+                    const data = await response.json();
+                    if (data.success) {
+                        // Update UI with new descriptions
+                        data.descriptions.forEach(desc => {
+                            const colIndex = currentColumns.findIndex(c => c.name === desc.name);
+                            if (colIndex > -1) {
+                                currentColumns[colIndex].description = desc.description;
+                                const item = rightPaneContent.querySelector(`.column-item[data-index="${colIndex}"]`);
+                                if(item) {
+                                    item.querySelector('.description').textContent = desc.description;
+                                }
+                            }
+                        });
+                        document.getElementById('save-to-atlan-btn').classList.remove('hidden');
+                    } else {
+                        handleError(data.error);
+                    }
+                } catch (error) {
+                    handleError(error.message);
+                }
+            }
+
+            async function saveToAtlan(asset, columns) {
+                try {
+                    const response = await fetch('/api/save_descriptions', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            asset_qualified_name: asset.qualified_name,
+                            source_type: asset.type,
+                            columns: columns 
+                        })
+                    });
+                    const data = await response.json();
+                    if (data.success) {
+                        alert('Successfully saved descriptions to Atlan!');
+                    } else {
+                        handleError(data.error);
+                    }
+                } catch (error) {
+                    handleError(error.message);
+                }
+            }
+
+            function handleError(message) {
+                rightPaneContent.innerHTML = `<p style="color: red;">Error: ${message}</p>`;
+            }
+        });
+    </script>
+</body>
+</html>
