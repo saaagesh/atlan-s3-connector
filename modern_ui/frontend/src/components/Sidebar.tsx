@@ -20,12 +20,12 @@ const sources: Source[] = [
 const getSourceIcon = (type: string) => {
   switch (type) {
     case 's3':
-      return <CloudIcon className="w-5 h-5" />;
+      return <CloudIcon className="w-5 h-5 text-atlan-gray" />;
     case 'postgres':
     case 'snowflake':
-      return <CircleStackIcon className="w-5 h-5" />;
+      return <CircleStackIcon className="w-5 h-5 text-atlan-gray" />;
     default:
-      return <TableCellsIcon className="w-5 h-5" />;
+      return <TableCellsIcon className="w-5 h-5 text-atlan-gray" />;
   }
 };
 
@@ -49,7 +49,7 @@ export const Sidebar = ({
   return (
     <div className="w-80 bg-white border-r border-gray-200 flex flex-col">
       <div className="p-6 border-b border-gray-200">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Data Sources</h2>
+        <h2 className="text-lg font-semibold text-atlan-dark mb-4">Data Sources</h2>
         
         {/* Source Selection */}
         <div className="mb-6">
@@ -58,7 +58,7 @@ export const Sidebar = ({
           </label>
           <Listbox value={selectedSource} onChange={onSourceChange}>
             <div className="relative">
-              <Listbox.Button className="relative w-full cursor-pointer rounded-lg bg-white py-3 pl-3 pr-10 text-left border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+              <Listbox.Button className="relative w-full cursor-pointer rounded-lg bg-white py-3 pl-3 pr-10 text-left border border-gray-300 focus:outline-none focus:ring-2 focus:ring-atlan-blue focus:border-transparent">
                 <span className="flex items-center">
                   {selectedSourceObj ? (
                     <>
@@ -87,7 +87,7 @@ export const Sidebar = ({
                       key={source.id}
                       className={({ active }) =>
                         `relative cursor-pointer select-none py-2 pl-3 pr-9 ${
-                          active ? 'bg-blue-50 text-blue-900' : 'text-gray-900'
+                          active ? 'bg-blue-50 text-atlan-blue' : 'text-gray-900'
                         }`
                       }
                       value={source.id}
@@ -103,7 +103,7 @@ export const Sidebar = ({
                             </span>
                           </div>
                           {selected && (
-                            <span className="absolute inset-y-0 right-0 flex items-center pr-4 text-blue-600">
+                            <span className="absolute inset-y-0 right-0 flex items-center pr-4 text-atlan-blue">
                               <CheckIcon className="h-5 w-5" />
                             </span>
                           )}
@@ -130,7 +130,7 @@ export const Sidebar = ({
             ) : (
               <Listbox value={selectedAsset} onChange={onAssetChange}>
                 <div className="relative">
-                  <Listbox.Button className="relative w-full cursor-pointer rounded-lg bg-white py-3 pl-3 pr-10 text-left border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                  <Listbox.Button className="relative w-full cursor-pointer rounded-lg bg-white py-3 pl-3 pr-10 text-left border border-gray-300 focus:outline-none focus:ring-2 focus:ring-atlan-blue focus:border-transparent">
                     <span className="block truncate">
                       {selectedAsset ? selectedAsset.name : 'Select asset/table...'}
                     </span>
@@ -150,7 +150,7 @@ export const Sidebar = ({
                           key={index}
                           className={({ active }) =>
                             `relative cursor-pointer select-none py-2 pl-3 pr-9 ${
-                              active ? 'bg-blue-50 text-blue-900' : 'text-gray-900'
+                              active ? 'bg-blue-50 text-atlan-blue' : 'text-gray-900'
                             }`
                           }
                           value={asset}
@@ -161,7 +161,7 @@ export const Sidebar = ({
                                 {asset.name}
                               </span>
                               {selected && (
-                                <span className="absolute inset-y-0 right-0 flex items-center pr-4 text-blue-600">
+                                <span className="absolute inset-y-0 right-0 flex items-center pr-4 text-atlan-blue">
                                   <CheckIcon className="h-5 w-5" />
                                 </span>
                               )}
@@ -181,10 +181,10 @@ export const Sidebar = ({
       {/* Selected Asset Info */}
       {selectedAsset && (
         <div className="p-6">
-          <h3 className="text-sm font-medium text-gray-900 mb-2">Selected Asset</h3>
+          <h3 className="text-sm font-medium text-atlan-dark mb-2">Selected Asset</h3>
           <div className="bg-gray-50 rounded-lg p-3">
-            <p className="text-sm font-medium text-gray-900">{selectedAsset.name}</p>
-            <p className="text-xs text-gray-500 mt-1">Type: {selectedAsset.type.toUpperCase()}</p>
+            <p className="text-sm font-medium text-atlan-dark">{selectedAsset.name}</p>
+            <p className="text-xs text-atlan-gray mt-1">Type: {selectedAsset.type.toUpperCase()}</p>
           </div>
         </div>
       )}

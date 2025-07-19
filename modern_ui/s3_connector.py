@@ -17,7 +17,7 @@ from pyatlan.model.assets import S3Object, S3Bucket, Connection
 from pyatlan.model.enums import AtlanConnectorType
 from pyatlan.model.fluent_search import FluentSearch
 from pyatlan.model.response import AssetMutationResponse
-from pyatlan.errors import NotFoundError
+from pyatlan.errors import NotFoundError, AtlanError
 
 from config import S3Config
 
@@ -103,6 +103,9 @@ class S3Connector:
             "snowflake_table": table_name,
             "description": f"Data for table {table_name}"
         }
+        
+        # Check if this object already exists in Atlan to get existing metadata
+        existing_metadata = await self._get_existing_asset_metadata(object_key)
 
         metadata = {
             'key': object_key,
@@ -115,7 +118,8 @@ class S3Connector:
             'unique_arn': unique_arn,
             'schema_info': schema_info,
             'file_mapping': file_mapping,
-            'qualified_name': f"default/s3/{self.connection_qualifier}/{self.s3_config.bucket_name}/{object_key}"
+            'qualified_name': f"default/s3/{self.connection_qualifier}/{self.s3_config.bucket_name}/{object_key}",
+            'existing_metadata': existing_metadata
         }
         
         return metadata
@@ -370,6 +374,150 @@ class S3Connector:
         
         logger.info(f"Found {len(modified_objects)} objects modified since {timestamp}")
         return modified_objects
+    
+    async def _get_existing_asset_metadata(self, object_key: str) -> Dict[str, Any]:
+        """
+        Retrieve existing metadata for an S3 object from Atlan if it exists
+        
+        Args:
+            object_key: S3 object key
+            
+        Returns:
+            Dictionary with existing metadata or empty dict if not found
+        """
+        logger.info(f"Checking for existing metadata for object: {object_key}")
+        
+        try:
+            # Try multiple search strategies to find the asset
+            search_strategies = [
+                # Strategy 1: Exact name match
+                lambda: FluentSearch()
+                    .where(FluentSearch.asset_type(S3Object))
+                    .where(S3Object.NAME.eq(object_key))
+                    .where(FluentSearch.active_assets())
+                    .include_on_results(S3Object.DESCRIPTION)
+                    .include_on_results(S3Object.USER_DESCRIPTION),
+                
+                # Strategy 2: Case-insensitive contains
+                lambda: FluentSearch()
+                    .where(FluentSearch.asset_type(S3Object))
+                    .where(S3Object.NAME.contains(object_key))
+                    .where(FluentSearch.active_assets())
+                    .include_on_results(S3Object.DESCRIPTION)
+                    .include_on_results(S3Object.USER_DESCRIPTION),
+                
+                # Strategy 3: Get all S3 objects and filter manually
+                lambda: FluentSearch()
+                    .where(FluentSearch.asset_type(S3Object))
+                    .where(FluentSearch.active_assets())
+                    .include_on_results(S3Object.DESCRIPTION)
+                    .include_on_results(S3Object.USER_DESCRIPTION)
+            ]
+            
+            asset = None
+            for strategy_idx, strategy in enumerate(search_strategies):
+                logger.info(f"Trying search strategy {strategy_idx + 1} for {object_key}")
+                request = strategy().to_request()
+                search_results = list(self.atlan_client.asset.search(request))
+                
+                if search_results:
+                    if strategy_idx == 2:  # Manual filtering for strategy 3
+                        # Try to find exact match first
+                        for result in search_results:
+                            if result.name.lower() == object_key.lower():
+                                asset = result
+                                logger.info(f"Found exact case-insensitive match: {result.name}")
+                                break
+                        
+                        # If no exact match, try contains
+                        if not asset:
+                            for result in search_results:
+                                if object_key.lower() in result.name.lower():
+                                    asset = result
+                                    logger.info(f"Found partial match: {result.name}")
+                                    break
+                    else:
+                        asset = search_results[0]
+                        logger.info(f"Found asset using strategy {strategy_idx + 1}: {asset.name}")
+                    
+                    if asset:
+                        break
+            
+            if not asset:
+                logger.info(f"No existing asset found for {object_key} after trying all strategies")
+                return {}
+            
+            # Log detailed information about the found asset
+            logger.info(f"Found asset: {asset.name} with qualified name: {asset.qualified_name}")
+            logger.info(f"Asset description: {getattr(asset, 'description', '(not available)')}")
+            logger.info(f"Asset user_description: {getattr(asset, 'user_description', '(not available)')}")
+            
+            # Extract relevant metadata safely
+            metadata = {
+                'description': getattr(asset, 'description', '') or '',
+                'user_description': getattr(asset, 'user_description', '') or '',
+                'owner_users': getattr(asset, 'owner_users', []),
+                'owner_groups': getattr(asset, 'owner_groups', []),
+                'readme': getattr(asset, 'readme', None),
+                'certificate_status': getattr(asset, 'certificate_status', None),
+                'certificate_status_message': getattr(asset, 'certificate_status_message', None),
+                'announcement_title': getattr(asset, 'announcement_title', None),
+                'announcement_message': getattr(asset, 'announcement_message', None),
+                'guid': asset.guid,
+                'qualified_name': asset.qualified_name
+            }
+            
+            # Get column-level metadata if available
+            column_metadata = await self._get_column_metadata_for_asset(asset)
+            if column_metadata:
+                metadata['columns'] = column_metadata
+                logger.info(f"Found {len(column_metadata)} columns with metadata")
+            else:
+                logger.info("No column metadata found")
+            
+            logger.info(f"Found existing metadata for {object_key}")
+            return metadata
+            
+        except Exception as e:
+            logger.error(f"Error retrieving existing metadata for {object_key}: {str(e)}")
+            return {}
+    
+    async def _get_column_metadata_for_asset(self, asset: S3Object) -> List[Dict[str, Any]]:
+        """
+        Retrieve column-level metadata for an S3 object
+        
+        Args:
+            asset: S3Object asset
+            
+        Returns:
+            List of column metadata dictionaries
+        """
+        try:
+            # For S3 objects, we don't have formal columns in Atlan
+            # Instead, we'll extract column info from the asset's description
+            
+            description = asset.description or ""
+            column_info = []
+            
+            # Try to parse column information from the description
+            if "Columns:" in description:
+                columns_part = description.split("Columns:")[1].strip()
+                column_names = [name.strip() for name in columns_part.split(',')]
+                
+                for col_name in column_names:
+                    if col_name:
+                        column_info.append({
+                            'name': col_name,
+                            'type': 'unknown',
+                            'description': '',
+                            'has_description': False
+                        })
+            
+            return column_info
+            
+        except Exception as e:
+            logger.error(f"Error retrieving column metadata: {str(e)}")
+            return []
     
     def add_tags_to_asset(self, asset, tags_to_add):
         """

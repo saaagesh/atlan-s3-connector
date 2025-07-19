@@ -412,6 +412,113 @@ class S3Connector:
             logger.error(f"Error adding Atlan tags to {asset.qualified_name}: {str(e)}")
             raise
     
+    async def _get_existing_asset_metadata(self, object_key: str) -> Dict[str, Any]:
+        """
+        Retrieve existing metadata for an S3 object from Atlan if it exists
+        
+        Args:
+            object_key: S3 object key
+            
+        Returns:
+            Dictionary with existing metadata or empty dict if not found
+        """
+        logger.info(f"Checking for existing metadata for object: {object_key}")
+        
+        try:
+            # Build the qualified name pattern for this object
+            bucket_pattern = f"{self.s3_config.bucket_name}-{self.s3_config.unique_suffix}"
+            
+            # Search for the S3 object by name
+            request = (
+                FluentSearch()
+                .where(FluentSearch.asset_type(S3Object))
+                .where(S3Object.NAME.eq(object_key))
+                .where(FluentSearch.active_assets())
+            ).to_request()
+            
+            search_results = list(self.atlan_client.asset.search(request))
+            
+            if not search_results:
+                logger.info(f"No existing asset found for {object_key}")
+                return {}
+            
+            # Get the first matching asset
+            asset = search_results[0]
+            
+            # Extract relevant metadata
+            metadata = {
+                'description': asset.description or '',
+                'user_description': asset.user_description or '',
+                'owner_users': getattr(asset, 'owner_users', []),
+                'owner_groups': getattr(asset, 'owner_groups', []),
+                'readme': getattr(asset, 'readme', None),
+                'certificate_status': getattr(asset, 'certificate_status', None),
+                'certificate_status_message': getattr(asset, 'certificate_status_message', None),
+                'announcement_title': getattr(asset, 'announcement_title', None),
+                'announcement_message': getattr(asset, 'announcement_message', None),
+                'guid': asset.guid,
+                'qualified_name': asset.qualified_name
+            }
+            
+            # Get column-level metadata if available
+            column_metadata = await self._get_column_metadata_for_asset(asset)
+            if column_metadata:
+                metadata['columns'] = column_metadata
+            
+            logger.info(f"Found existing metadata for {object_key}")
+            return metadata
+            
+        except Exception as e:
+            logger.error(f"Error retrieving existing metadata for {object_key}: {str(e)}")
+            return {}
+    
+    async def _get_column_metadata_for_asset(self, asset: S3Object) -> List[Dict[str, Any]]:
+        """
+        Retrieve column-level metadata for an S3 object
+        
+        Args:
+            asset: S3Object asset
+            
+        Returns:
+            List of column metadata dictionaries
+        """
+        try:
+            # For S3 objects, we don't have formal columns in Atlan
+            # Instead, we'll extract column info from the asset's description
+            # In a real implementation, you might have a more structured approach
+            
+            description = asset.description or ""
+            column_info = []
+            
+            # Try to parse column information from the description
+            # This is a simple approach - in a real implementation you might store this more formally
+            if "Schema:" in description:
+                schema_part = description.split("Schema:")[1].strip()
+                columns_text = schema_part.split("columns -")[1].strip() if "columns -" in schema_part else schema_part
+                
+                # Parse individual column descriptions
+                for col_desc in columns_text.split(";"):
+                    col_desc = col_desc.strip()
+                    if col_desc:
+                        # Extract name and type
+                        name_parts = col_desc.split("(")
+                        if len(name_parts) > 1:
+                            col_name = name_parts[0].strip()
+                            col_type = name_parts[1].split(")")[0].strip()
+                            
+                            column_info.append({
+                                'name': col_name,
+                                'type': col_type,
+                                'description': '',  # No separate description in this implementation
+                                'has_description': False
+                            })
+            
+            return column_info
+            
+        except Exception as e:
+            logger.error(f"Error retrieving column metadata: {str(e)}")
+            return []
+    
     async def update_assets_with_ai_insights(
         self, 
         assets: List[Dict[str, Any]], 

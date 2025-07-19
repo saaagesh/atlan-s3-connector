@@ -5,10 +5,11 @@ import {
     CheckCircleIcon,
     ExclamationTriangleIcon
 } from '@heroicons/react/24/outline';
-import { useColumns, useGenerateDescriptions, useSaveDescriptions } from '../hooks/useApi';
+import { useColumns, useEnhanceColumns, useSaveDescriptions } from '../hooks/useApi';
 import { Asset, ColumnWithStatus } from '../types';
 import { LoadingSpinner } from './LoadingSpinner';
 import { ColumnCard } from './ColumnCard';
+import { AssetDescription } from './AssetDescription';
 import toast from 'react-hot-toast';
 
 interface MainContentProps {
@@ -22,52 +23,65 @@ export const MainContent = ({ selectedAsset }: MainContentProps) => {
     const {
         data: fetchedColumns,
         isLoading: columnsLoading,
-        error: columnsError
-    } = useColumns(
-        selectedAsset?.qualified_name || '',
-        selectedAsset?.type || ''
-    );
+        error: columnsError,
+        refetch: refetchColumns,
+    } = useColumns(selectedAsset);
 
-    const generateMutation = useGenerateDescriptions();
+    const generateMutation = useEnhanceColumns();
     const saveMutation = useSaveDescriptions();
 
-    // Update local columns when fetched columns change
     useEffect(() => {
         if (fetchedColumns) {
-            setColumns(fetchedColumns.map(col => ({ ...col, hasChanges: false })));
+            setColumns(fetchedColumns.map(col => ({ ...col, hasChanges: false, isGenerating: false })));
             setHasUnsavedChanges(false);
         }
     }, [fetchedColumns]);
+    
+    useEffect(() => {
+        if (selectedAsset) {
+            refetchColumns();
+        }
+    }, [selectedAsset, refetchColumns]);
+
 
     const handleGenerateAll = async () => {
         if (!selectedAsset || columns.length === 0) return;
 
-        // Set all columns as generating
+        const columnsToEnhance = columns.filter(c => !c.description);
+        if (columnsToEnhance.length === 0) {
+            toast.success('All columns already have descriptions.');
+            return;
+        }
+
         setColumns(prev => prev.map(col => ({ ...col, isGenerating: true })));
 
-        try {
-            const result = await generateMutation.mutateAsync({
+        toast.promise(
+            generateMutation.mutateAsync({
                 asset_qualified_name: selectedAsset.qualified_name,
-                columns: columns.map(col => ({ name: col.name, description: col.description }))
-            });
-
-            // Update columns with generated descriptions
-            setColumns(prev => prev.map(col => {
-                const generated = result.find(r => r.name === col.name);
-                return {
-                    ...col,
-                    description: generated?.description || col.description,
-                    isGenerating: false,
-                    hasChanges: !!generated?.description
-                };
-            }));
-
-            setHasUnsavedChanges(true);
-            toast.success(`Generated descriptions for ${result.length} columns`);
-        } catch (error) {
-            setColumns(prev => prev.map(col => ({ ...col, isGenerating: false })));
-            toast.error('Failed to generate descriptions');
-        }
+                asset_name: selectedAsset.name,
+                columns: columnsToEnhance.map(col => ({ name: col.name, type: col.type }))
+            }),
+            {
+                loading: 'Generating descriptions for all columns...',
+                success: (result) => {
+                    setColumns(prev => prev.map(col => {
+                        const generated = result.find(r => r.name === col.name);
+                        return {
+                            ...col,
+                            description: generated?.description || col.description,
+                            isGenerating: false,
+                            hasChanges: !!generated?.description
+                        };
+                    }));
+                    setHasUnsavedChanges(true);
+                    return `Generated descriptions for ${result.length} columns`;
+                },
+                error: (err) => {
+                    setColumns(prev => prev.map(col => ({ ...col, isGenerating: false })));
+                    return `Failed to generate descriptions: ${err.message}`;
+                }
+            }
+        );
     };
 
     const handleGenerateOne = async (columnName: string) => {
@@ -76,42 +90,44 @@ export const MainContent = ({ selectedAsset }: MainContentProps) => {
         const column = columns.find(col => col.name === columnName);
         if (!column) return;
 
-        // Set specific column as generating
         setColumns(prev => prev.map(col =>
-            col.name === columnName
-                ? { ...col, isGenerating: true }
-                : col
+            col.name === columnName ? { ...col, isGenerating: true } : col
         ));
 
-        try {
-            const result = await generateMutation.mutateAsync({
+        toast.promise(
+             generateMutation.mutateAsync({
                 asset_qualified_name: selectedAsset.qualified_name,
-                columns: [{ name: column.name, description: column.description }]
-            });
-
-            const generated = result[0];
-            if (generated) {
-                setColumns(prev => prev.map(col =>
-                    col.name === columnName
-                        ? {
-                            ...col,
-                            description: generated.description,
-                            isGenerating: false,
-                            hasChanges: true
-                        }
-                        : col
-                ));
-                setHasUnsavedChanges(true);
-                toast.success(`Generated description for ${columnName}`);
+                asset_name: selectedAsset.name,
+                columns: [{ name: column.name, type: column.type }]
+            }),
+            {
+                loading: `Generating description for ${columnName}...`,
+                success: (result) => {
+                    const generated = result[0];
+                     if (generated) {
+                        setColumns(prev => prev.map(col =>
+                            col.name === columnName
+                                ? {
+                                    ...col,
+                                    description: generated.description,
+                                    isGenerating: false,
+                                    hasChanges: true
+                                }
+                                : col
+                        ));
+                        setHasUnsavedChanges(true);
+                        return `Generated description for ${columnName}`;
+                    }
+                    return 'No description generated.';
+                },
+                error: (err) => {
+                     setColumns(prev => prev.map(col =>
+                        col.name === columnName ? { ...col, isGenerating: false } : col
+                    ));
+                    return `Failed to generate description: ${err.message}`;
+                }
             }
-        } catch (error) {
-            setColumns(prev => prev.map(col =>
-                col.name === columnName
-                    ? { ...col, isGenerating: false }
-                    : col
-            ));
-            toast.error(`Failed to generate description for ${columnName}`);
-        }
+        );
     };
 
     const handleDescriptionChange = (columnName: string, newDescription: string) => {
@@ -133,19 +149,21 @@ export const MainContent = ({ selectedAsset }: MainContentProps) => {
             return;
         }
 
-        try {
-            await saveMutation.mutateAsync({
+        toast.promise(
+            saveMutation.mutateAsync({
                 asset_qualified_name: selectedAsset.qualified_name,
-                source_type: selectedAsset.type,
                 columns: columnsToSave.map(col => ({ name: col.name, description: col.description }))
-            });
-
-            setColumns(prev => prev.map(col => ({ ...col, hasChanges: false })));
-            setHasUnsavedChanges(false);
-            toast.success(`Saved descriptions for ${columnsToSave.length} columns to Atlan`);
-        } catch (error) {
-            toast.error('Failed to save descriptions to Atlan');
-        }
+            }),
+            {
+                loading: 'Saving descriptions to Atlan...',
+                success: () => {
+                    setColumns(prev => prev.map(col => ({ ...col, hasChanges: false })));
+                    setHasUnsavedChanges(false);
+                    return `Saved descriptions for ${columnsToSave.length} columns to Atlan`;
+                },
+                error: (err) => `Failed to save descriptions: ${err.message}`
+            }
+        );
     };
 
     if (!selectedAsset) {
@@ -180,21 +198,7 @@ export const MainContent = ({ selectedAsset }: MainContentProps) => {
                     <ExclamationTriangleIcon className="mx-auto h-12 w-12 text-red-400" />
                     <h3 className="mt-2 text-sm font-medium text-gray-900">Error loading columns</h3>
                     <p className="mt-1 text-sm text-gray-500">
-                        {columnsError.message || 'Failed to load columns'}
-                    </p>
-                </div>
-            </div>
-        );
-    }
-
-    if (columns.length === 0) {
-        return (
-            <div className="flex-1 flex items-center justify-center">
-                <div className="text-center">
-                    <DocumentTextIcon className="mx-auto h-12 w-12 text-gray-400" />
-                    <h3 className="mt-2 text-sm font-medium text-gray-900">No columns found</h3>
-                    <p className="mt-1 text-sm text-gray-500">
-                        This asset doesn't have any columns to display.
+                        {columnsError.message || 'An unexpected error occurred.'}
                     </p>
                 </div>
             </div>
@@ -202,23 +206,23 @@ export const MainContent = ({ selectedAsset }: MainContentProps) => {
     }
 
     return (
-        <div className="flex-1 flex flex-col bg-white">
+        <div className="flex-1 flex flex-col bg-gray-50">
             {/* Header */}
-            <div className="border-b border-gray-200 px-6 py-4">
+            <div className="bg-white border-b border-gray-200 px-6 py-4">
                 <div className="flex items-center justify-between">
                     <div>
-                        <h2 className="text-lg font-semibold text-gray-900">
+                        <h2 className="text-lg font-semibold text-atlan-dark">
                             {selectedAsset.name}
                         </h2>
-                        <p className="text-sm text-gray-500">
+                        <p className="text-sm text-atlan-gray">
                             {columns.length} columns • {selectedAsset.type.toUpperCase()}
                         </p>
                     </div>
                     <div className="flex space-x-3">
                         <button
                             onClick={handleGenerateAll}
-                            disabled={generateMutation.isPending}
-                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={generateMutation.isPending || saveMutation.isPending}
+                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-atlan-blue hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-atlan-blue disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <SparklesIcon className="w-4 h-4 mr-2" />
                             {generateMutation.isPending ? 'Generating...' : 'Generate All'}
@@ -237,20 +241,29 @@ export const MainContent = ({ selectedAsset }: MainContentProps) => {
                 </div>
             </div>
 
-            {/* Columns List */}
+            {/* Main Area */}
             <div className="flex-1 overflow-y-auto p-6">
-                <div className="space-y-4">
-                    {columns.map((column) => (
-                        <ColumnCard
-                            key={column.name}
-                            column={column}
-                            onGenerate={() => handleGenerateOne(column.name)}
-                            onDescriptionChange={(description) =>
-                                handleDescriptionChange(column.name, description)
-                            }
-                        />
-                    ))}
-                </div>
+                <AssetDescription asset={selectedAsset} />
+                 {columns.length === 0 ? (
+                     <div className="text-center text-gray-500">
+                        <DocumentTextIcon className="mx-auto h-12 w-12 text-gray-400" />
+                        <h3 className="mt-2 text-sm font-medium text-gray-900">No columns found</h3>
+                        <p className="mt-1 text-sm text-gray-500">This asset may not have columns or they are still being loaded.</p>
+                    </div>
+                 ) : (
+                    <div className="space-y-4">
+                        {columns.map((column) => (
+                            <ColumnCard
+                                key={column.name}
+                                column={column}
+                                onGenerate={() => handleGenerateOne(column.name)}
+                                onDescriptionChange={(description) =>
+                                    handleDescriptionChange(column.name, description)
+                                }
+                            />
+                        ))}
+                    </div>
+                 )}
             </div>
         </div>
     );

@@ -34,6 +34,69 @@ class AIEnhancer:
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel(config.gemini_model)
 
+    async def generate_asset_description(self, payload: Dict[str, Any]) -> str:
+        """
+        Generates an AI description for an asset (S3 object or table) using the Gemini API.
+        
+        Args:
+            payload: Dictionary containing asset information
+            
+        Returns:
+            Generated description string
+        """
+        asset_name = payload.get('name', 'Unknown Asset')
+        asset_type = payload.get('type', 'unknown')
+        
+        logger.info(f"Generating description for asset: {asset_name} (type: {asset_type})")
+        
+        # Build context for the prompt based on asset type
+        context = f"Asset name: {asset_name}\nAsset type: {asset_type}\n"
+        
+        # Add schema information for S3 objects
+        if asset_type == 's3' and 'schema_info' in payload:
+            schema_info = payload['schema_info']
+            columns = schema_info.get('columns', [])
+            
+            if columns:
+                context += f"\nThis is a CSV file with {len(columns)} columns:\n"
+                for col in columns:
+                    col_name = col.get('name', 'Unknown')
+                    col_type = col.get('type', 'Unknown')
+                    sample_values = col.get('sample_values', [])
+                    
+                    context += f"- {col_name} ({col_type})"
+                    if sample_values:
+                        samples = ', '.join([str(s) for s in sample_values[:3]])
+                        context += f" - Sample values: {samples}"
+                    context += "\n"
+        
+        prompt = f"""
+        As a senior data analyst, your task is to write a clear, business-friendly description for a data asset.
+        
+        Here's information about the asset:
+        {context}
+        
+        Generate a concise (2-3 sentences) but informative description that explains:
+        1. What this asset likely contains
+        2. Its potential business purpose
+        3. How it might be used in analytics or operations
+        
+        The description should be professional and helpful for data users who need to understand this asset.
+        
+        Description:
+        """
+        
+        try:
+            response = await self.model.generate_content_async(prompt)
+            description = response.text.strip()
+            
+            logger.info(f"Successfully generated description for {asset_name}")
+            return description
+            
+        except Exception as e:
+            logger.error(f"Failed to generate asset description: {e}")
+            return f"This appears to be a {asset_type} asset named {asset_name}."
+
     async def generate_column_level_descriptions(self, payload: Dict[str, Any]) -> List[Dict[str, str]]:
         """
         Generates real AI descriptions for a list of columns using the Gemini API.

@@ -1,50 +1,63 @@
+// src/services/api.ts
 import axios from 'axios';
-import { 
-  Asset, 
-  Column, 
-  GenerateDescriptionsRequest, 
-  GenerateDescriptionsResponse,
-  SaveDescriptionsRequest 
-} from '../types';
+import { Asset, Column } from '../types';
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 30000,
 });
 
-export const apiService = {
-  async getAssetsBySource(source: string): Promise<Asset[]> {
-    const response = await api.post('/assets_by_source', { source });
-    if (!response.data.success) {
-      throw new Error(response.data.error || 'Failed to fetch assets');
-    }
-    return response.data.assets;
-  },
+export const getAssetsBySource = async (source: string): Promise<Asset[]> => {
+  const { data } = await api.post('/assets_by_source', { source });
+  if (data.success) {
+    return data.assets;
+  }
+  throw new Error(data.error || 'Failed to fetch assets');
+};
 
-  async getColumns(assetQualifiedName: string, sourceType: string): Promise<Column[]> {
-    const response = await api.post('/columns', {
-      asset_qualified_name: assetQualifiedName,
-      source_type: sourceType,
+export const getColumns = async (assetQualifiedName: string, sourceType: string): Promise<Column[]> => {
+  const { data } = await api.post('/columns', { asset_qualified_name: assetQualifiedName, source_type: sourceType });
+  if (data.success) {
+    return data.columns;
+  }
+  throw new Error(data.error || 'Failed to fetch columns');
+};
+
+export const enhanceColumns = async (payload: { asset_qualified_name: string; asset_name: string; columns: { name: string; type: string }[] }) => {
+  const { data } = await api.post('/enhance_columns', payload);
+  if (data.success) {
+    return data.descriptions;
+  }
+  throw new Error(data.error || 'Failed to enhance columns');
+};
+
+export const saveDescriptions = async (payload: { asset_qualified_name: string; columns: { name: string; description: string }[] }) => {
+  const { data } = await api.post('/save_descriptions', payload);
+  if (data.success) {
+    return data;
+  }
+  throw new Error(data.error || 'Failed to save descriptions');
+};
+
+export const generateAssetDescription = async (asset: Asset) => {
+    const { data } = await api.post('/generate_asset_description', {
+        asset_qualified_name: asset.qualified_name,
+        asset_name: asset.name,
+        asset_type: asset.type,
     });
-    if (!response.data.success) {
-      throw new Error(response.data.error || 'Failed to fetch columns');
+    if (data.success) {
+        return data.description;
     }
-    return response.data.columns;
-  },
+    throw new Error(data.error || 'Failed to generate asset description');
+};
 
-  async generateDescriptions(request: GenerateDescriptionsRequest): Promise<GenerateDescriptionsResponse[]> {
-    const response = await api.post('/enhance_columns', request);
-    if (!response.data.success) {
-      throw new Error(response.data.error || 'Failed to generate descriptions');
+export const saveAssetDescription = async (asset: Asset, description: string) => {
+    const { data } = await api.post('/save_asset_description', {
+        asset_qualified_name: asset.qualified_name,
+        asset_type: asset.type,
+        description: description,
+    });
+    if (data.success) {
+        return data;
     }
-    return response.data.descriptions;
-  },
-
-  async saveDescriptions(request: SaveDescriptionsRequest): Promise<string> {
-    const response = await api.post('/save_descriptions', request);
-    if (!response.data.success) {
-      throw new Error(response.data.error || 'Failed to save descriptions');
-    }
-    return response.data.message;
-  },
+    throw new Error(data.error || 'Failed to save asset description');
 };

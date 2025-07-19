@@ -24,7 +24,10 @@ export default {
           700: '#374151',
           800: '#1f2937',
           900: '#111827',
-        }
+        },
+        'atlan-blue': '#0070F3',
+        'atlan-dark': '#1A202C',
+        'atlan-gray': '#A0AEC0',
       }
     },
   },

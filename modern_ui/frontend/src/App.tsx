@@ -1,8 +1,13 @@
+// src/App.tsx
 import { useState } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Toaster } from 'react-hot-toast';
 import { Sidebar } from './components/Sidebar';
 import { MainContent } from './components/MainContent';
 import { Header } from './components/Header';
 import { Asset } from './types';
+
+const queryClient = new QueryClient();
 
 function App() {
   const [selectedSource, setSelectedSource] = useState<string>('');
@@ -18,18 +23,21 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Header />
-      <div className="flex h-[calc(100vh-4rem)]">
-        <Sidebar
-          selectedSource={selectedSource}
-          selectedAsset={selectedAsset}
-          onSourceChange={handleSourceChange}
-          onAssetChange={handleAssetChange}
-        />
-        <MainContent selectedAsset={selectedAsset} />
+    <QueryClientProvider client={queryClient}>
+      <Toaster position="top-right" />
+      <div className="min-h-screen bg-gray-50">
+        <Header />
+        <div className="flex h-[calc(100vh-4rem)]">
+          <Sidebar
+            selectedSource={selectedSource}
+            selectedAsset={selectedAsset}
+            onSourceChange={handleSourceChange}
+            onAssetChange={handleAssetChange}
+          />
+          <MainContent selectedAsset={selectedAsset} />
+        </div>
       </div>
-    </div>
+    </QueryClientProvider>
   );
 }
 
