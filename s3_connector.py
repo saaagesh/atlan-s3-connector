@@ -324,7 +324,7 @@ class S3Connector:
 
     def _create_s3_object_asset(self, bucket_qualified_name: str, s3_obj: Dict[str, Any], asset_batch: list):
         """
-        Creates and adds an S3 object asset to a batch.
+        Creates and adds an S3 object asset to a batch with enhanced column metadata.
         """
         creator = S3Object.creator(
             name=s3_obj['key'],
@@ -333,17 +333,38 @@ class S3Connector:
             connection_qualified_name=self.connection_qn,
             aws_arn=s3_obj['unique_arn']
         )
-        creator.description = s3_obj['file_mapping'].get('description', f"CSV file: {s3_obj['key']}")
+        
+        # Enhanced description with column information
+        base_description = s3_obj['file_mapping'].get('description', f"CSV file: {s3_obj['key']}")
+        
+        if s3_obj['schema_info']['columns']:
+            columns = s3_obj['schema_info']['columns']
+            column_details = []
+            
+            for col in columns:
+                col_detail = f"{col['name']} ({col['type']})"
+                if col.get('sample_values'):
+                    sample_str = ', '.join(str(v) for v in col['sample_values'][:2])
+                    col_detail += f" [e.g., {sample_str}]"
+                column_details.append(col_detail)
+            
+            schema_description = f"Schema: {len(columns)} columns - " + "; ".join(column_details)
+            creator.description = f"{base_description}\n\n{schema_description}"
+            
+            # Add column count as a custom attribute if available
+            try:
+                creator.column_count = len(columns)
+            except:
+                pass  # Some versions might not support this attribute
+        else:
+            creator.description = base_description
+        
+        # Set other S3 object properties
         creator.s3_object_size = s3_obj['size']
         creator.s3_object_last_modified_time = s3_obj['last_modified']
         creator.s3_object_content_type = s3_obj['content_type']
         creator.s3_e_tag = s3_obj['etag']
         
-        if s3_obj['schema_info']['columns']:
-            schema_summary = f"Columns: {', '.join([col['name'] for col in s3_obj['schema_info']['columns']])}"
-            # Store schema info in description field initially, AI will update user_description later
-            creator.description = schema_summary
-            
         asset_batch.append(creator)
     
     async def get_modified_objects_since(self, timestamp: datetime) -> List[Dict[str, Any]]:

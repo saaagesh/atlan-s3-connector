@@ -1,0 +1,14 @@
+{
+  "success": true,
+  "duration_seconds": 11.44321584701538,
+  "assets_cataloged": 8,
+  "ai_results": {},
+  "performance_metrics": {
+    "total_operations": 2,
+    "successful_operations": 2,
+    "failed_operations": 0,
+    "total_duration": 11.442975282669067,
+    "average_duration": 5.721487641334534,
+    "success_rate": 100.0
+  }
+}

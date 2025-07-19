@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-ATLAN_BASE_URL = os.getenv("ATLAN_BASE_URL", "https://tech-challenge.atlan.com")
+ATLAN_BASE_URL = os.getenv("ATLAN_BASE_URL")
 ATLAN_API_KEY = os.getenv("ATLAN_API_KEY")
 
     

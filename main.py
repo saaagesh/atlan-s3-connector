@@ -15,6 +15,7 @@ from s3_connector import S3Connector
 from lineage_builder import LineageBuilder
 from ai_enhancer import AIEnhancer
 from utils import AtlanUtils, PerformanceMonitor
+from pyatlan.model.assets import Process
 
 # Configure logging
 logging.basicConfig(
@@ -65,15 +66,87 @@ class AtlanS3Pipeline:
             logger.info(f"Cataloged {len(cataloged_assets)} S3 assets")
             
             # Phase 2: Build lineage relationships
-            logger.info("Phase 2: Lineage Relationship Building")
+            logger.info("Phase 2: Lineage Relationship Building (with cleanup)")
             with self.performance_monitor.measure("lineage_building"):
-                lineage_batch = []
-                self.lineage_builder.build_lineage(cataloged_assets, self.s3_connector.connection_qn, lineage_batch)
+                # Phase 2a: Create table-level lineage processes
+                table_lineage_batch = []
+                column_processes_info = self.lineage_builder.build_lineage(
+                    cataloged_assets, 
+                    self.s3_connector.connection_qn, 
+                    table_lineage_batch, 
+                    cleanup_first=True
+                )
                 
-                # Only save if there are lineage relationships to create
-                if lineage_batch:
-                    self.s3_connector.atlan_client.asset.save(lineage_batch)
-                    logger.info(f"Created {len(lineage_batch)} lineage processes")
+                # Save table-level processes first
+                if table_lineage_batch:
+                    logger.info(f"Phase 2a: Saving {len(table_lineage_batch)} table-level lineage processes...")
+                    
+                    # Log process details for debugging
+                    for i, process in enumerate(table_lineage_batch):
+                        logger.info(f"Table Process {i+1}: {process.name}")
+                        logger.info(f"  Inputs: {len(process.inputs) if process.inputs else 0}")
+                        logger.info(f"  Outputs: {len(process.outputs) if process.outputs else 0}")
+                        logger.info(f"  Connection: {process.connection_qualified_name}")
+                    
+                    try:
+                        table_response = self.s3_connector.atlan_client.asset.save(table_lineage_batch)
+                        logger.info(f"Table lineage save response received")
+                        
+                        created_table_processes = []
+                        
+                        # Debug: Log response attributes
+                        logger.info(f"Response type: {type(table_response)}")
+                        
+                        # More robustly get all processes from the response, whether created or updated
+                        if table_response:
+                            created_assets = table_response.assets_created(asset_type=Process)
+                            updated_assets = table_response.assets_updated(asset_type=Process)
+                            created_table_processes.extend(created_assets)
+                            created_table_processes.extend(updated_assets)
+                            
+                            logger.info(f"Found {len(created_assets)} created and {len(updated_assets)} updated processes.")
+                            logger.info(f"Total table lineage processes to use: {len(created_table_processes)}")
+
+                            for process in created_table_processes:
+                                logger.info(f"Retrieved table process: {process.name} (GUID: {process.guid})")
+                        
+                        # Phase 2b: Create column-level lineage processes if we have column info
+                        if column_processes_info and created_table_processes:
+                            logger.info(f"Phase 2b: Creating {len(column_processes_info)} column-level lineage processes...")
+                            
+                            column_lineage_batch = self.lineage_builder.create_column_lineage_processes(
+                                column_processes_info, 
+                                created_table_processes
+                            )
+                            
+                            if column_lineage_batch:
+                                logger.info(f"Saving {len(column_lineage_batch)} column lineage processes...")
+                                
+                                try:
+                                    column_response = self.s3_connector.atlan_client.asset.save(column_lineage_batch)
+                                    logger.info(f"Column lineage save response received")
+                                    
+                                    if hasattr(column_response, 'assets_created'):
+                                        from pyatlan.model.assets import ColumnProcess
+                                        created_column_processes = column_response.assets_created(asset_type=ColumnProcess)
+                                        logger.info(f"Successfully created {len(created_column_processes)} column lineage processes in Atlan")
+                                        
+                                        for process in created_column_processes:
+                                            logger.info(f"Created column process: {process.name} (GUID: {process.guid})")
+                                    else:
+                                        logger.warning("Column save response doesn't have assets_created method")
+                                        
+                                except Exception as e:
+                                    logger.error(f"Failed to save column lineage processes: {str(e)}")
+                                    logger.error(f"Error type: {type(e).__name__}")
+                            else:
+                                logger.warning("No column lineage processes were created")
+                        else:
+                            logger.info("Skipping column lineage creation - no column info or table processes")
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to save table lineage processes: {str(e)}")
+                        logger.error(f"Error type: {type(e).__name__}")
                 else:
                     logger.warning("No lineage relationships were created - no matching tables found")
             
@@ -130,7 +203,7 @@ async def main():
     pipeline = AtlanS3Pipeline()
     
     # Run full pipeline
-    results = await pipeline.run_pipeline(enable_ai=True)
+    results = await pipeline.run_pipeline(enable_ai=False)
     
     # Print results
     print("\n" + "="*50)
