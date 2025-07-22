@@ -420,77 +420,65 @@ class S3Connector:
             tags_to_add: List of tag names to add
         """
         try:
-            logger.info(f"Adding Atlan tags to {asset.qualified_name}: {tags_to_add}")
+            # Use only tags that are known to exist in Atlan
+            # These are the tag names that you've manually created in the Atlan UI
+            existing_tag_names = [
+                "PII",                           # General PII tag
+                "GDPR",                          # GDPR compliance
+                "PDPA",                          # Singapore PDPA
+                "Sensitive",                     # General sensitive data
+                "Financial",                     # Financial data
+                "Customer Data",                 # Customer data
+                "Personal Information"           # Personal information
+            ]
             
-            # Filter out any empty or None tags
-            valid_tags = [tag for tag in tags_to_add if tag]
+            # Map our generated tags to existing Atlan tags
+            tag_mapping = {
+                "singapore_pdpa": "PDPA",
+                "indonesia_pp71": "Sensitive",
+                "gdpr_equivalent": "GDPR",
+                "financial_sensitive": "Financial",
+                "customer_data": "Customer Data",
+                "hr_restricted": "Sensitive",
+                "transaction_audit": "Financial"
+            }
             
+            # Convert our tags to actual Atlan tags
+            valid_tags = []
+            for tag in tags_to_add:
+                if tag in tag_mapping and tag_mapping[tag] in existing_tag_names:
+                    valid_tags.append(tag_mapping[tag])
+                elif tag in existing_tag_names:
+                    valid_tags.append(tag)
+            
+            # If we have any PII, add the general PII tag
+            if any(tag in ["singapore_pdpa", "indonesia_pp71", "gdpr_equivalent"] for tag in tags_to_add):
+                if "PII" in existing_tag_names and "PII" not in valid_tags:
+                    valid_tags.append("PII")
+            
+            # If no valid tags, skip
             if not valid_tags:
-                logger.warning(f"No valid tags to add to {asset.qualified_name}")
+                logger.warning(f"No valid Atlan tags to add to {asset.qualified_name}")
                 return None
             
-            # Use the direct client method to add tags
-            try:
-                # This is the standard way to add Atlan tags in the current pyatlan version
-                from pyatlan.model.assets import S3Object
-                
-                result = self.atlan_client.asset.add_atlan_tags(
-                    asset_type=S3Object,
-                    qualified_name=asset.qualified_name,
-                    atlan_tag_names=valid_tags
-                )
-                
-                logger.info(f"Successfully added Atlan tags to {asset.qualified_name}: {valid_tags}")
-                return result
-                
-            except ImportError:
-                # If the above fails, try an alternative approach
-                logger.warning("Using alternative tag application method")
-                
-                # Create an updater for the asset
-                updater = S3Object.updater(
-                    qualified_name=asset.qualified_name,
-                    name=asset.name
-                )
-                
-                # Set the Atlan tags
-                # Note: This approach might not work in all pyatlan versions
-                # but it's worth trying as a fallback
-                try:
-                    updater.atlan_tags = valid_tags
-                    result = self.atlan_client.asset.save(updater)
-                    logger.info(f"Applied tags using alternative method: {valid_tags}")
-                    return result
-                except Exception as alt_error:
-                    logger.error(f"Alternative tag application failed: {str(alt_error)}")
-                    return None
+            logger.info(f"Adding Atlan tags to {asset.qualified_name}: {valid_tags}")
+            
+            # Use the client's add_atlan_tags method
+            result = self.atlan_client.add_atlan_tags(
+                asset_type=S3Object,
+                qualified_name=asset.qualified_name,
+                atlan_tag_names=valid_tags
+            )
+            
+            logger.info(f"Successfully added Atlan tags to {asset.qualified_name}: {valid_tags}")
+            return result
             
         except Exception as e:
             logger.error(f"Error adding Atlan tags to {asset.qualified_name}: {str(e)}")
-            # Don't raise the exception - just log it and continue
+            # Don't raise the exception, just log it
             return None
             
-    def _check_tag_exists(self, tag_name):
-        """
-        Check if a tag exists in Atlan
-        
-        Args:
-            tag_name: Name of the tag to check
-            
-        Returns:
-            Boolean indicating if tag exists
-        """
-        # For simplicity, we'll assume all tags in our config exist
-        # In a production environment, you would verify this with the Atlan API
-        from config import COMPLIANCE_TAGS
-        
-        # Check if it's in our predefined list
-        if tag_name in COMPLIANCE_TAGS:
-            return True
-            
-        # For any other tags, assume they exist if they're in a standard format
-        # This is a very simplified check
-        return tag_name and len(tag_name) > 2
+
     
     async def _get_existing_asset_metadata(self, object_key: str) -> Dict[str, Any]:
         """
@@ -552,26 +540,7 @@ class S3Connector:
             logger.error(f"Error retrieving existing metadata for {object_key}: {str(e)}")
             return {}
     
-    def _ensure_compliance_tags_exist(self, tag_names):
-        """
-        Ensure that compliance tags exist in Atlan
-        Note: We're not creating tags programmatically as it requires admin access
-        and the tags should be pre-created in the Atlan instance
-        
-        Args:
-            tag_names: List of tag names to check/create
-        """
-        # In this simplified version, we'll just log the tags we're using
-        # and assume they've been pre-created in the Atlan instance
-        from config import COMPLIANCE_TAGS
-        
-        logger.info(f"Using compliance tags: {tag_names}")
-        for tag_name in tag_names:
-            tag_description = COMPLIANCE_TAGS.get(tag_name, f"Compliance tag: {tag_name}")
-            logger.info(f"  - {tag_name}: {tag_description}")
-            
-        # Note: In a production environment, you might want to verify tags exist
-        # using the Atlan API, but we'll skip that for simplicity
+
     
     async def _get_column_metadata_for_asset(self, asset: S3Object) -> List[Dict[str, Any]]:
         """
@@ -674,20 +643,12 @@ class S3Connector:
                 #         logger.info(f"PII detected in {asset_key}: {pii_info.get('pii_types', [])}")
                 #         logger.info(f"PII confidence: {pii_info.get('confidence', 0):.2f}")
                 
-                # Apply compliance tags using the new tagging method
+                # Apply compliance tags using the working method from parent directory
                 if asset_key in compliance_tags and compliance_tags[asset_key]:
                     try:
                         logger.info(f"Applying compliance tags to {asset_key}: {compliance_tags[asset_key]}")
                         
-                        # Skip tag creation - assume tags exist
-                        # Just log the tags we're using
-                        from config import COMPLIANCE_TAGS
-                        logger.info(f"Using compliance tags: {compliance_tags[asset_key]}")
-                        for tag_name in compliance_tags[asset_key]:
-                            tag_description = COMPLIANCE_TAGS.get(tag_name, f"Compliance tag: {tag_name}")
-                            logger.info(f"  - {tag_name}: {tag_description}")
-                        
-                        # Then add the tags to the asset
+                        # Add the tags to the asset using the working method
                         result = self.add_tags_to_asset(asset, compliance_tags[asset_key])
                         if result:
                             updates_made.append("compliance tags")

@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# deploy_fixed.sh - Deploy Cloud Function with fixed tag handling
-# This script deploys the Atlan S3 Connector with the tag fixes
+# deploy_fixed.sh - Deploy Cloud Function with working tag implementation from parent directory
+# This script deploys the Atlan S3 Connector with the working tag fixes
 
 set -e  # Exit on any error
 
@@ -11,7 +11,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}🚀 Deploying Atlan S3 Connector with Tag Fixes${NC}"
+echo -e "${GREEN}🚀 Deploying Atlan S3 Connector with Working Tag Implementation${NC}"
 echo "=================================================="
 
 # Configuration
@@ -64,7 +64,14 @@ fi
 
 echo -e "${GREEN}✅ All required environment variables are set${NC}"
 
-echo -e "${YELLOW}🚀 Deploying Cloud Function with tag fixes...${NC}"
+echo -e "${YELLOW}📋 Summary of fixes applied:${NC}"
+echo "  ✅ Copied working add_tags_to_asset method from parent directory"
+echo "  ✅ Updated AI enhancer with working PII classification logic"
+echo "  ✅ Removed problematic tag creation methods"
+echo "  ✅ Using tag mapping to existing Atlan tags"
+echo ""
+
+echo -e "${YELLOW}🚀 Deploying Cloud Function with working tag implementation...${NC}"
 
 gcloud functions deploy $FUNCTION_NAME \
     --runtime $RUNTIME \
@@ -93,3 +100,11 @@ echo "     -d '{\"enable_ai\": true}'"
 echo ""
 echo -e "${GREEN}📊 View logs:${NC}"
 echo "gcloud functions logs read $FUNCTION_NAME --region=$REGION"
+echo ""
+echo -e "${GREEN}🏷️  Expected tags to be applied:${NC}"
+echo "  - PII (for any PII data)"
+echo "  - PDPA (Singapore compliance)"
+echo "  - GDPR (European compliance)"
+echo "  - Financial (financial data)"
+echo "  - Customer Data (customer information)"
+echo "  - Sensitive (general sensitive data)"
