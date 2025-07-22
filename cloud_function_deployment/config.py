@@ -33,7 +33,7 @@ class ConnectionConfig:
 @dataclass
 class AIConfig:
     """AI enhancement configuration"""
-    google_api_key: str = os.getenv("GEMINI_API_KEY")  # Updated to use GEMINI_API_KEY
+    google_api_key: str = os.getenv("GOOGLE_API_KEY")
     gemini_model: str = "gemini-2.5-flash"
     pii_detection_threshold: float = 0.8
     enable_auto_description: bool = True

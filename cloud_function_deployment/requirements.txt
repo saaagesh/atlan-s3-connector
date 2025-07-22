@@ -1,0 +1,38 @@
+# Cloud Function Requirements
+# Core Cloud Functions framework
+functions-framework==3.*
+
+# Atlan SDK - specify a compatible version
+pyatlan>=6.2.0
+
+# AWS SDK for S3 operations
+boto3
+botocore
+
+# Google AI for Gemini
+google-generativeai
+
+# Environment and configuration
+python-dotenv
+
+# Async HTTP client
+aiohttp
+
+# Data processing
+pandas
+numpy
+
+# Logging and monitoring
+structlog
+
+# Date/time utilities
+python-dateutil
+
+# JSON handling
+orjson
+
+# HTTP requests
+requests
+
+# Type hints support
+typing-extensions

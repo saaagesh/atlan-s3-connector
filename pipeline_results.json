@@ -1,14 +1,27 @@
 {
   "success": true,
-  "duration_seconds": 11.44321584701538,
+  "duration_seconds": 213.3027970790863,
   "assets_cataloged": 8,
-  "ai_results": {},
+  "ai_results": {
+    "descriptions_generated": 8,
+    "pii_classifications": 8,
+    "compliance_tags": 8
+  },
+  "pii_inventory_results": {
+    "report_generated": true,
+    "report_file": "pii_inventory_report.json",
+    "propagation_results": {
+      "assets_processed": 0,
+      "propagated_to": 0,
+      "failed": 0
+    }
+  },
   "performance_metrics": {
-    "total_operations": 2,
-    "successful_operations": 2,
+    "total_operations": 3,
+    "successful_operations": 3,
     "failed_operations": 0,
-    "total_duration": 11.442975282669067,
-    "average_duration": 5.721487641334534,
+    "total_duration": 213.30191922187805,
+    "average_duration": 71.10063974062602,
     "success_rate": 100.0
   }
 }

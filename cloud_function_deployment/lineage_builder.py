@@ -199,7 +199,7 @@ class LineageBuilder:
         Returns:
             Number of processes cleaned up
         """
-        logger.info(f"Cleaning up existing lineage processes for connection: {connection_qn}")
+        logger.info("Cleaning up existing lineage processes...")
         
         try:
             # Search for existing Process assets related to this S3 connection
@@ -214,10 +214,6 @@ class LineageBuilder:
             
             if existing_processes:
                 logger.info(f"Found {len(existing_processes)} existing lineage processes to clean up")
-                
-                # Log details of processes to be deleted
-                for process in existing_processes:
-                    logger.info(f"Will delete process: {process.name} (GUID: {process.guid}, Process ID: {getattr(process, 'process_id', 'N/A')})")
                 
                 # Delete existing processes
                 guids_to_delete = [process.guid for process in existing_processes]
@@ -281,31 +277,24 @@ class LineageBuilder:
                 
                 logger.info(f"PostgreSQL columns: {len(pg_columns)}")
                 logger.info(f"Snowflake columns: {len(sf_columns)}")
-                
-                # Debug: Log table GUIDs
-                logger.info(f"PostgreSQL table GUID: {pg_table.guid}")
-                logger.info(f"Snowflake table GUID: {sf_table.guid}")
-                logger.info(f"S3 asset GUID: {s3_asset.guid}")
 
                 # Create a consolidated process for PostgreSQL -> Snowflake (for business lineage)
                 e2e_process = Process.creator(
                     name=f"ETL: {pg_table.name} → {sf_table.name}",
                     connection_qualified_name=connection_qn,
-                    # process_id attribute is not supported in this version of the SDK
-                    # process_id=f"e2e_{table_name}",
+                    process_id=f"e2e_{table_name}",
                     inputs=[Table.ref_by_guid(guid=pg_table.guid)],
                     outputs=[Table.ref_by_guid(guid=sf_table.guid)]
                 )
                 e2e_process.description = f"End-to-end lineage from {pg_table.name} to {sf_table.name}, intermediated by S3."
                 lineage_batch.append(e2e_process)
-                logger.info(f"Created end-to-end process for {table_name} with process_id: e2e_{table_name}")
+                logger.info(f"Created end-to-end process for {table_name}")
                 
                 # Create PostgreSQL → S3 process
                 pg_to_s3_process = Process.creator(
                     name=f"Extract: {pg_table.name} → {s3_asset.name}",
                     connection_qualified_name=connection_qn,
-                    # process_id attribute is not supported in this version of the SDK
-                    # process_id=f"extract_{table_name}_to_s3",
+                    process_id=f"extract_{table_name}_to_s3",
                     inputs=[Table.ref_by_guid(guid=pg_table.guid)],
                     outputs=[S3Object.ref_by_guid(guid=s3_asset.guid)]
                 )
@@ -323,8 +312,7 @@ SELECT * FROM {pg_table.name};
                 s3_to_sf_process = Process.creator(
                     name=f"Load: {s3_asset.name} → {sf_table.name}",
                     connection_qualified_name=connection_qn,
-                    # process_id attribute is not supported in this version of the SDK
-                    # process_id=f"load_s3_to_{table_name}",
+                    process_id=f"load_s3_to_{table_name}",
                     inputs=[S3Object.ref_by_guid(guid=s3_asset.guid)],
                     outputs=[Table.ref_by_guid(guid=sf_table.guid)]
                 )
@@ -429,8 +417,7 @@ FILE_FORMAT = (TYPE = 'CSV' FIELD_DELIMITER = ',' SKIP_HEADER = 1);"""
                 column_process = ColumnProcess.creator(
                     name=f"{col_info['pg_column'].name} → {col_info['sf_column'].name}",
                     connection_qualified_name=col_info['connection_qn'],
-                    # process_id attribute is not supported in this version of the SDK
-                    # process_id=f"col_lineage_{col_info['table_name']}_{col_info['pg_column'].name}_{col_info['sf_column'].name}",
+                    process_id=f"col_lineage_{col_info['table_name']}_{col_info['pg_column'].name}_{col_info['sf_column'].name}",
                     inputs=[Column.ref_by_guid(guid=col_info['pg_column'].guid)],
                     outputs=[Column.ref_by_guid(guid=col_info['sf_column'].guid)],
                     parent=Process.ref_by_guid(guid=parent_process.guid)
@@ -446,4 +433,3 @@ FILE_FORMAT = (TYPE = 'CSV' FIELD_DELIMITER = ',' SKIP_HEADER = 1);"""
         
         logger.info(f"Created {len(column_lineage_batch)} column lineage processes")
         return column_lineage_batch
-

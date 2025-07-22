@@ -7,6 +7,7 @@ Handles S3 object discovery, metadata extraction, and asset creation
 import boto3
 import pandas as pd
 import logging
+import os
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 import asyncio
@@ -31,7 +32,30 @@ class S3Connector:
         self.connection_qn: Optional[str] = None
         
         # Initialize clients
-        self.s3_client = boto3.client('s3', region_name=s3_config.region)
+        try:
+            # Try to get AWS credentials from environment variables
+            aws_access_key = os.environ.get('AWS_ACCESS_KEY_ID')
+            aws_secret_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
+            
+            if aws_access_key and aws_secret_key:
+                # Use explicit credentials if available
+                logger.info("Using AWS credentials from environment variables")
+                self.s3_client = boto3.client(
+                    's3',
+                    region_name=s3_config.region,
+                    aws_access_key_id=aws_access_key,
+                    aws_secret_access_key=aws_secret_key
+                )
+            else:
+                # Fall back to default credential provider chain
+                logger.info("No explicit AWS credentials found, using default credential provider chain")
+                self.s3_client = boto3.client('s3', region_name=s3_config.region)
+                
+            logger.info(f"Successfully initialized S3 client for region {s3_config.region}")
+        except Exception as e:
+            logger.error(f"Failed to initialize S3 client: {str(e)}")
+            raise RuntimeError(f"AWS S3 client initialization failed: {str(e)}. Please ensure AWS credentials are properly configured.")
+            
         self.atlan_client = get_atlan_client()
         
         # Create unique connection qualifier
@@ -396,63 +420,77 @@ class S3Connector:
             tags_to_add: List of tag names to add
         """
         try:
-            # Use only tags that are known to exist in Atlan
-            # These are the tag names that you've manually created in the Atlan UI
-            existing_tag_names = [
-                "PII",                           # General PII tag
-                "GDPR",                          # GDPR compliance
-                "PDPA",                          # Singapore PDPA
-                "Sensitive",                     # General sensitive data
-                "Financial",                     # Financial data
-                "Customer Data",                 # Customer data
-                "Personal Information"           # Personal information
-            ]
+            logger.info(f"Adding Atlan tags to {asset.qualified_name}: {tags_to_add}")
             
-            # Map our generated tags to existing Atlan tags
-            tag_mapping = {
-                "singapore_pdpa": "PDPA",
-                "indonesia_pp71": "Sensitive",
-                "gdpr_equivalent": "GDPR",
-                "financial_sensitive": "Financial",
-                "customer_data": "Customer Data",
-                "hr_restricted": "Sensitive",
-                "transaction_audit": "Financial"
-            }
+            # Filter out any empty or None tags
+            valid_tags = [tag for tag in tags_to_add if tag]
             
-            # Convert our tags to actual Atlan tags
-            valid_tags = []
-            for tag in tags_to_add:
-                if tag in tag_mapping and tag_mapping[tag] in existing_tag_names:
-                    valid_tags.append(tag_mapping[tag])
-                elif tag in existing_tag_names:
-                    valid_tags.append(tag)
-            
-            # If we have any PII, add the general PII tag
-            if any(tag in ["singapore_pdpa", "indonesia_pp71", "gdpr_equivalent"] for tag in tags_to_add):
-                if "PII" in existing_tag_names and "PII" not in valid_tags:
-                    valid_tags.append("PII")
-            
-            # If no valid tags, skip
             if not valid_tags:
-                logger.warning(f"No valid Atlan tags to add to {asset.qualified_name}")
+                logger.warning(f"No valid tags to add to {asset.qualified_name}")
                 return None
             
-            logger.info(f"Adding Atlan tags to {asset.qualified_name}: {valid_tags}")
-            
-            # Use the client's add_atlan_tags method
-            result = self.atlan_client.add_atlan_tags(
-                asset_type=S3Object,
-                qualified_name=asset.qualified_name,
-                atlan_tag_names=valid_tags
-            )
-            
-            logger.info(f"Successfully added Atlan tags to {asset.qualified_name}: {valid_tags}")
-            return result
+            # Use the direct client method to add tags
+            try:
+                # This is the standard way to add Atlan tags in the current pyatlan version
+                from pyatlan.model.assets import S3Object
+                
+                result = self.atlan_client.asset.add_atlan_tags(
+                    asset_type=S3Object,
+                    qualified_name=asset.qualified_name,
+                    atlan_tag_names=valid_tags
+                )
+                
+                logger.info(f"Successfully added Atlan tags to {asset.qualified_name}: {valid_tags}")
+                return result
+                
+            except ImportError:
+                # If the above fails, try an alternative approach
+                logger.warning("Using alternative tag application method")
+                
+                # Create an updater for the asset
+                updater = S3Object.updater(
+                    qualified_name=asset.qualified_name,
+                    name=asset.name
+                )
+                
+                # Set the Atlan tags
+                # Note: This approach might not work in all pyatlan versions
+                # but it's worth trying as a fallback
+                try:
+                    updater.atlan_tags = valid_tags
+                    result = self.atlan_client.asset.save(updater)
+                    logger.info(f"Applied tags using alternative method: {valid_tags}")
+                    return result
+                except Exception as alt_error:
+                    logger.error(f"Alternative tag application failed: {str(alt_error)}")
+                    return None
             
         except Exception as e:
             logger.error(f"Error adding Atlan tags to {asset.qualified_name}: {str(e)}")
-            # Don't raise the exception, just log it
+            # Don't raise the exception - just log it and continue
             return None
+            
+    def _check_tag_exists(self, tag_name):
+        """
+        Check if a tag exists in Atlan
+        
+        Args:
+            tag_name: Name of the tag to check
+            
+        Returns:
+            Boolean indicating if tag exists
+        """
+        # For simplicity, we'll assume all tags in our config exist
+        # In a production environment, you would verify this with the Atlan API
+        from config import COMPLIANCE_TAGS
+        
+        # Check if it's in our predefined list
+        if tag_name in COMPLIANCE_TAGS:
+            return True
+            
+        # For any other tags, assume they exist if they're in a standard format
+        # This is a very simplified check
+        return tag_name and len(tag_name) > 2
     
     async def _get_existing_asset_metadata(self, object_key: str) -> Dict[str, Any]:
         """
@@ -514,6 +552,27 @@ class S3Connector:
             logger.error(f"Error retrieving existing metadata for {object_key}: {str(e)}")
             return {}
     
+    def _ensure_compliance_tags_exist(self, tag_names):
+        """
+        Ensure that compliance tags exist in Atlan
+        Note: We're not creating tags programmatically as it requires admin access
+        and the tags should be pre-created in the Atlan instance
+        
+        Args:
+            tag_names: List of tag names to check/create
+        """
+        # In this simplified version, we'll just log the tags we're using
+        # and assume they've been pre-created in the Atlan instance
+        from config import COMPLIANCE_TAGS
+        
+        logger.info(f"Using compliance tags: {tag_names}")
+        for tag_name in tag_names:
+            tag_description = COMPLIANCE_TAGS.get(tag_name, f"Compliance tag: {tag_name}")
+            logger.info(f"  - {tag_name}: {tag_description}")
+            
+        # Note: In a production environment, you might want to verify tags exist
+        # using the Atlan API, but we'll skip that for simplicity
+    
     async def _get_column_metadata_for_asset(self, asset: S3Object) -> List[Dict[str, Any]]:
         """
         Retrieve column-level metadata for an S3 object
@@ -569,7 +628,7 @@ class S3Connector:
         compliance_tags: Dict[str, List[str]]
     ) -> None:
         """
-        Update assets with AI-generated insights, PII classifications, and CIA ratings
+        Update assets with AI-generated insights
         
         Args:
             assets: List of asset information
@@ -577,13 +636,13 @@ class S3Connector:
             pii_classifications: PII classification results
             compliance_tags: Compliance tags
         """
-        logger.info("Updating assets with AI insights and PII classifications")
+        logger.info("Updating assets with AI insights")
         
         for asset_info in assets:
             try:
                 asset_key = asset_info['metadata']['key']
                 
-                logger.info(f"Updating asset {asset_key} with AI insights and PII classifications")
+                logger.info(f"Updating asset {asset_key} with AI insights")
                 
                 # Get the asset to update
                 asset = asset_info['asset']
@@ -608,66 +667,36 @@ class S3Connector:
                 else:
                     logger.warning(f"No AI description found for {asset_key}")
                 
-                # Apply PII classification and CIA ratings if available
-                if asset_key in pii_classifications:
-                    pii_data = pii_classifications[asset_key]
-                    
-                    # Add PII information as custom metadata
-                    try:
-                        # Create a custom metadata structure for PII information
-                        pii_metadata = {
-                            "hasPII": "Yes" if pii_data.get('has_pii', False) else "No",
-                            "piiTypes": ", ".join(pii_data.get('pii_types', [])) if pii_data.get('pii_types') else "None",
-                            "sensitivityLevel": pii_data.get('sensitivity_level', 'Low'),
-                            "classificationDate": datetime.now().isoformat(),
-                            "classificationConfidence": str(pii_data.get('confidence', 0.0))
-                        }
-                        
-                        # Add sensitive columns if available
-                        if pii_data.get('sensitive_columns'):
-                            pii_metadata["sensitiveColumns"] = ", ".join(pii_data.get('sensitive_columns', []))
-                        
-                        # Store PII information in user_description instead of custom metadata
-                        # since custom_metadata_set might not be available in this version of the SDK
-                        pii_description = f"\n\nPII Classification:\n"
-                        pii_description += f"- Has PII: {'Yes' if pii_data.get('has_pii', False) else 'No'}\n"
-                        pii_description += f"- PII Types: {', '.join(pii_data.get('pii_types', [])) if pii_data.get('pii_types') else 'None'}\n"
-                        pii_description += f"- Sensitivity Level: {pii_data.get('sensitivity_level', 'Low')}\n"
-                        
-                        if pii_data.get('sensitive_columns'):
-                            pii_description += f"- Sensitive Columns: {', '.join(pii_data.get('sensitive_columns', []))}\n"
-                        
-                        # Apply CIA ratings if available
-                        if pii_data.get('cia_rating'):
-                            cia_rating = pii_data['cia_rating']
-                            pii_description += f"\nCIA Rating:\n"
-                            pii_description += f"- Confidentiality: {cia_rating.get('confidentiality', 'Low')}\n"
-                            pii_description += f"- Integrity: {cia_rating.get('integrity', 'Low')}\n"
-                            pii_description += f"- Availability: {cia_rating.get('availability', 'Low')}\n"
-                        
-                        # Append to existing description or set as new description
-                        if updater.user_description:
-                            updater.user_description += pii_description
-                        else:
-                            updater.user_description = pii_description
-                            
-                        updates_made.append("PII classification")
-                        logger.info(f"Setting PII classification for {asset_key}: {pii_data.get('pii_types', [])}")
-                        updates_made.append("CIA ratings")
-                        logger.info(f"Setting CIA ratings for {asset_key}: C={cia_rating.get('confidentiality', 'Low')}, I={cia_rating.get('integrity', 'Low')}, A={cia_rating.get('availability', 'Low')}")
-                        
-                    except Exception as pii_error:
-                        logger.error(f"Failed to apply PII classification to {asset_key}: {str(pii_error)}")
+                # PII logic commented out for now
+                # if asset_key in pii_classifications:
+                #     pii_info = pii_classifications[asset_key]
+                #     if pii_info.get('has_pii'):
+                #         logger.info(f"PII detected in {asset_key}: {pii_info.get('pii_types', [])}")
+                #         logger.info(f"PII confidence: {pii_info.get('confidence', 0):.2f}")
                 
-                # Apply compliance tags using the tagging method
+                # Apply compliance tags using the new tagging method
                 if asset_key in compliance_tags and compliance_tags[asset_key]:
                     try:
                         logger.info(f"Applying compliance tags to {asset_key}: {compliance_tags[asset_key]}")
-                        self.add_tags_to_asset(asset, compliance_tags[asset_key])
-                        updates_made.append("compliance tags")
-                        logger.info(f"Successfully applied compliance tags to {asset_key}")
+                        
+                        # Skip tag creation - assume tags exist
+                        # Just log the tags we're using
+                        from config import COMPLIANCE_TAGS
+                        logger.info(f"Using compliance tags: {compliance_tags[asset_key]}")
+                        for tag_name in compliance_tags[asset_key]:
+                            tag_description = COMPLIANCE_TAGS.get(tag_name, f"Compliance tag: {tag_name}")
+                            logger.info(f"  - {tag_name}: {tag_description}")
+                        
+                        # Then add the tags to the asset
+                        result = self.add_tags_to_asset(asset, compliance_tags[asset_key])
+                        if result:
+                            updates_made.append("compliance tags")
+                            logger.info(f"Successfully applied compliance tags to {asset_key}")
+                        else:
+                            logger.warning(f"No tags were applied to {asset_key}")
                     except Exception as tag_error:
                         logger.error(f"Failed to apply compliance tags to {asset_key}: {str(tag_error)}")
+                        # Continue with other updates even if tagging fails
                 
                 # Update the asset
                 if updates_made:
@@ -679,4 +708,4 @@ class S3Connector:
             except Exception as e:
                 logger.error(f"Failed to update asset {asset_info['metadata']['key']} with AI insights: {str(e)}")
         
-        logger.info("Completed updating assets with AI insights and PII classifications")
+        logger.info("Completed updating assets with AI insights")
