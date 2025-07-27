@@ -143,3 +143,85 @@ class AIEnhancer:
             logger.error(f"Failed to generate or parse AI descriptions: {e}")
             return [{"name": col['name'], "description": f"Error during AI generation: {e}"} for col in payload['columns']]
 
+    async def generate_glossary_readme(self, payload: Dict[str, Any]) -> str:
+        """
+        Generates an AI-powered README for a business glossary term or category.
+        
+        Args:
+            payload: Dictionary containing glossary item information
+            
+        Returns:
+            Generated README content as markdown string
+        """
+        item_name = payload.get('name', 'Unknown Item')
+        item_type = payload.get('type', 'term')
+        description = payload.get('description', '')
+        
+        logger.info(f"Generating README for glossary {item_type}: {item_name}")
+        
+        # Build context based on item type
+        if item_type == 'category':
+            prompt = f"""
+            As a business analyst and data governance expert, create a comprehensive README for a business glossary category.
+            
+            Category Name: {item_name}
+            Current Description: {description if description else 'No description provided'}
+            
+            Generate a well-structured README in markdown format that includes:
+            
+            1. **Overview** - What this category represents in the business context
+            2. **Purpose** - Why this category exists and its business value
+            3. **Scope** - What types of terms belong in this category
+            4. **Usage Guidelines** - How teams should use terms from this category
+            5. **Related Categories** - How this category relates to other business areas
+            6. **Governance** - Who maintains this category and approval processes
+            
+            The README should be professional, clear, and help business users understand when and how to use terms from this category.
+            
+            README Content:
+            """
+        else:  # term
+            prompt = f"""
+            As a business analyst and data governance expert, create a comprehensive README for a business glossary term.
+            
+            Term Name: {item_name}
+            Current Description: {description if description else 'No description provided'}
+            
+            Generate a well-structured README in markdown format that includes:
+            
+            1. **Definition** - Clear, business-friendly definition of this term
+            2. **Business Context** - How this term is used in business operations
+            3. **Data Context** - How this term relates to data assets and fields
+            4. **Usage Examples** - Practical examples of when to use this term
+            5. **Related Terms** - Other glossary terms that are related or similar
+            6. **Calculation/Rules** - If applicable, how this term is calculated or determined
+            7. **Data Sources** - Where data for this term typically comes from
+            8. **Governance** - Who owns this term and approval processes for changes
+            
+            The README should help both business and technical users understand exactly what this term means and how to use it consistently.
+            
+            README Content:
+            """
+        
+        try:
+            response = await self.model.generate_content_async(prompt)
+            readme_content = response.text.strip()
+            
+            logger.info(f"Successfully generated README for {item_type}: {item_name}")
+            return readme_content
+            
+        except Exception as e:
+            logger.error(f"Failed to generate glossary README: {e}")
+            return f"""# {item_name}
+
+## Overview
+This is a business glossary {item_type} that requires documentation.
+
+{f"**Current Description:** {description}" if description else ""}
+
+## Status
+README generation failed. Please manually update this content.
+
+**Error:** {str(e)}
+"""
+

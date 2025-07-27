@@ -1,0 +1,35 @@
+{
+  "generated_at": "{{now}}",
+  "summary": {
+    "total_assets_scanned": 0,
+    "assets_with_pii": 0,
+    "high_sensitivity_assets": 0,
+    "medium_sensitivity_assets": 0,
+    "low_sensitivity_assets": 0
+  },
+  "by_source": {
+    "postgres": {
+      "total": 0,
+      "with_pii": 0
+    },
+    "s3": {
+      "total": 0,
+      "with_pii": 0
+    },
+    "snowflake": {
+      "total": 0,
+      "with_pii": 0
+    }
+  },
+  "by_pii_type": {
+    "email": 0,
+    "phone": 0,
+    "name": 0,
+    "address": 0,
+    "id": 0,
+    "financial": 0,
+    "health": 0,
+    "biometric": 0
+  },
+  "sensitive_assets": []
+}

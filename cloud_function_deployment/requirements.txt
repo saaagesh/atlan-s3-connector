@@ -3,7 +3,7 @@
 functions-framework==3.*
 
 # Atlan SDK - specify a compatible version
-pyatlan>=6.2.0
+pyatlan>=7.0.0
 
 # AWS SDK for S3 operations
 boto3
@@ -15,21 +15,12 @@ google-generativeai
 # Environment and configuration
 python-dotenv
 
-# Async HTTP client
-aiohttp
-
 # Data processing
 pandas
 numpy
 
-# Logging and monitoring
-structlog
-
 # Date/time utilities
 python-dateutil
-
-# JSON handling
-orjson
 
 # HTTP requests
 requests

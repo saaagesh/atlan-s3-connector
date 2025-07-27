@@ -3,20 +3,25 @@ import {
     SparklesIcon,
     DocumentTextIcon,
     CheckCircleIcon,
-    ExclamationTriangleIcon
+    ExclamationTriangleIcon,
+    BookOpenIcon,
+    TableCellsIcon
 } from '@heroicons/react/24/outline';
 import { useColumns, useEnhanceColumns, useSaveDescriptions } from '../hooks/useApi';
 import { Asset, ColumnWithStatus } from '../types';
 import { LoadingSpinner } from './LoadingSpinner';
 import { ColumnCard } from './ColumnCard';
 import { AssetDescription } from './AssetDescription';
+import { BusinessGlossaryTab } from './BusinessGlossaryTab';
 import toast from 'react-hot-toast';
 
 interface MainContentProps {
+    activeTab: 'columns' | 'glossary';
     selectedAsset: Asset | null;
+    onTabChange: (tab: 'columns' | 'glossary') => void;
 }
 
-export const MainContent = ({ selectedAsset }: MainContentProps) => {
+export const MainContent = ({ activeTab, selectedAsset, onTabChange }: MainContentProps) => {
     const [columns, setColumns] = useState<ColumnWithStatus[]>([]);
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
@@ -166,15 +171,52 @@ export const MainContent = ({ selectedAsset }: MainContentProps) => {
         );
     };
 
+    // Handle case when no asset is selected
     if (!selectedAsset) {
         return (
-            <div className="flex-1 flex items-center justify-center bg-gray-50">
-                <div className="text-center">
-                    <DocumentTextIcon className="mx-auto h-12 w-12 text-gray-400" />
-                    <h3 className="mt-2 text-sm font-medium text-gray-900">No asset selected</h3>
-                    <p className="mt-1 text-sm text-gray-500">
-                        Select a data source and asset from the sidebar to get started.
-                    </p>
+            <div className="flex-1 flex flex-col bg-gray-50">
+                {/* Tabs */}
+                <div className="bg-white border-b border-gray-200">
+                    <nav className="flex space-x-8 px-6" aria-label="Tabs">
+                        <button
+                            onClick={() => onTabChange('columns')}
+                            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                                activeTab === 'columns'
+                                    ? 'border-atlan-blue text-atlan-blue'
+                                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                            }`}
+                        >
+                            <TableCellsIcon className="w-4 h-4 inline mr-2" />
+                            Table & Column Descriptions
+                        </button>
+                        <button
+                            onClick={() => onTabChange('glossary')}
+                            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                                activeTab === 'glossary'
+                                    ? 'border-atlan-blue text-atlan-blue'
+                                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                            }`}
+                        >
+                            <BookOpenIcon className="w-4 h-4 inline mr-2" />
+                            Business Glossary
+                        </button>
+                    </nav>
+                </div>
+                
+                <div className="flex-1 overflow-y-auto p-6">
+                    {activeTab === 'columns' ? (
+                        <div className="flex items-center justify-center h-full">
+                            <div className="text-center">
+                                <DocumentTextIcon className="mx-auto h-12 w-12 text-gray-400" />
+                                <h3 className="mt-2 text-sm font-medium text-gray-900">No asset selected</h3>
+                                <p className="mt-1 text-sm text-gray-500">
+                                    Select a data source and asset from the sidebar to get started.
+                                </p>
+                            </div>
+                        </div>
+                    ) : (
+                        <BusinessGlossaryTab />
+                    )}
                 </div>
             </div>
         );
@@ -212,58 +254,97 @@ export const MainContent = ({ selectedAsset }: MainContentProps) => {
                 <div className="flex items-center justify-between">
                     <div>
                         <h2 className="text-lg font-semibold text-atlan-dark">
-                            {selectedAsset.name}
+                            {activeTab === 'glossary' ? 'Business Glossary Management' : selectedAsset?.name || 'Asset'}
                         </h2>
                         <p className="text-sm text-atlan-gray">
-                            {columns.length} columns • {selectedAsset.type.toUpperCase()}
+                            {activeTab === 'glossary' 
+                                ? 'Manage README content for business glossary terms and categories'
+                                : `${columns.length} columns • ${selectedAsset?.type.toUpperCase() || 'UNKNOWN'}`
+                            }
                         </p>
                     </div>
-                    <div className="flex space-x-3">
-                        <button
-                            onClick={handleGenerateAll}
-                            disabled={generateMutation.isPending || saveMutation.isPending}
-                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-atlan-blue hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-atlan-blue disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            <SparklesIcon className="w-4 h-4 mr-2" />
-                            {generateMutation.isPending ? 'Generating...' : 'Generate All'}
-                        </button>
-                        {hasUnsavedChanges && (
+                    {activeTab === 'columns' && (
+                        <div className="flex space-x-3">
                             <button
-                                onClick={handleSaveAll}
-                                disabled={saveMutation.isPending}
-                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                                onClick={handleGenerateAll}
+                                disabled={generateMutation.isPending || saveMutation.isPending}
+                                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-atlan-blue hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-atlan-blue disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                <CheckCircleIcon className="w-4 h-4 mr-2" />
-                                {saveMutation.isPending ? 'Saving...' : 'Save to Atlan'}
+                                <SparklesIcon className="w-4 h-4 mr-2" />
+                                {generateMutation.isPending ? 'Generating...' : 'Generate All'}
                             </button>
-                        )}
-                    </div>
+                            {hasUnsavedChanges && (
+                                <button
+                                    onClick={handleSaveAll}
+                                    disabled={saveMutation.isPending}
+                                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    <CheckCircleIcon className="w-4 h-4 mr-2" />
+                                    {saveMutation.isPending ? 'Saving...' : 'Save to Atlan'}
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
 
-            {/* Main Area */}
+            {/* Tabs */}
+            <div className="bg-white border-b border-gray-200">
+                <nav className="flex space-x-8 px-6" aria-label="Tabs">
+                    <button
+                        onClick={() => onTabChange('columns')}
+                        className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                            activeTab === 'columns'
+                                ? 'border-atlan-blue text-atlan-blue'
+                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                        }`}
+                    >
+                        <TableCellsIcon className="w-4 h-4 inline mr-2" />
+                        Table & Column Descriptions
+                    </button>
+                    <button
+                        onClick={() => onTabChange('glossary')}
+                        className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                            activeTab === 'glossary'
+                                ? 'border-atlan-blue text-atlan-blue'
+                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                        }`}
+                    >
+                        <BookOpenIcon className="w-4 h-4 inline mr-2" />
+                        Business Glossary
+                    </button>
+                </nav>
+            </div>
+
+            {/* Tab Content */}
             <div className="flex-1 overflow-y-auto p-6">
-                <AssetDescription asset={selectedAsset} />
-                 {columns.length === 0 ? (
-                     <div className="text-center text-gray-500">
-                        <DocumentTextIcon className="mx-auto h-12 w-12 text-gray-400" />
-                        <h3 className="mt-2 text-sm font-medium text-gray-900">No columns found</h3>
-                        <p className="mt-1 text-sm text-gray-500">This asset may not have columns or they are still being loaded.</p>
-                    </div>
-                 ) : (
-                    <div className="space-y-4">
-                        {columns.map((column) => (
-                            <ColumnCard
-                                key={column.name}
-                                column={column}
-                                onGenerate={() => handleGenerateOne(column.name)}
-                                onDescriptionChange={(description) =>
-                                    handleDescriptionChange(column.name, description)
-                                }
-                            />
-                        ))}
-                    </div>
-                 )}
+                {activeTab === 'columns' ? (
+                    <>
+                        {selectedAsset && <AssetDescription asset={selectedAsset} />}
+                        {columns.length === 0 ? (
+                            <div className="text-center text-gray-500">
+                                <DocumentTextIcon className="mx-auto h-12 w-12 text-gray-400" />
+                                <h3 className="mt-2 text-sm font-medium text-gray-900">No columns found</h3>
+                                <p className="mt-1 text-sm text-gray-500">This asset may not have columns or they are still being loaded.</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                {columns.map((column) => (
+                                    <ColumnCard
+                                        key={column.name}
+                                        column={column}
+                                        onGenerate={() => handleGenerateOne(column.name)}
+                                        onDescriptionChange={(description) =>
+                                            handleDescriptionChange(column.name, description)
+                                        }
+                                    />
+                                ))}
+                            </div>
+                        )}
+                    </>
+                ) : (
+                    <BusinessGlossaryTab />
+                )}
             </div>
         </div>
     );

@@ -11,9 +11,7 @@ import os
 import logging
 from datetime import datetime
 
-# Import the original pipeline
-import sys
-sys.path.append('..')
+# Import the pipeline
 from atlan_s3_pipeline import AtlanS3Pipeline
 
 # Configure logging for Cloud Functions

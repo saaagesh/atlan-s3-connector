@@ -74,9 +74,14 @@ class AtlanS3Pipeline:
             with self.performance_monitor.measure("lineage_building"):
                 # Phase 2a: Create table-level lineage processes
                 table_lineage_batch = []
+                # Use connection-level qualified name for lineage processes (not database/schema level)
+                # Extract just the connection part: "default/postgres/1752268493" from "default/postgres/1752268493/FOOD_BEVERAGE/SALES_ORDERS"
+                postgres_connection_parts = self.connection_config.postgres_connection_qn.split('/')
+                lineage_connection_qn = '/'.join(postgres_connection_parts[:3])  # Take first 3 parts: default/postgres/1752268493
+                logger.info(f"Using lineage connection QN: {lineage_connection_qn}")
                 column_processes_info = self.lineage_builder.build_lineage(
                     cataloged_assets, 
-                    self.s3_connector.connection_qn, 
+                    lineage_connection_qn, 
                     table_lineage_batch, 
                     cleanup_first=True
                 )
@@ -101,50 +106,157 @@ class AtlanS3Pipeline:
                                 logger.info(f"    Output {j+1}: {out.guid if hasattr(out, 'guid') else 'No GUID'}")
                     
                     try:
+                        logger.info(f"Saving {len(table_lineage_batch)} lineage processes to Atlan...")
                         table_response = self.s3_connector.atlan_client.asset.save(table_lineage_batch)
                         logger.info(f"Table lineage save response received")
                         
+                        # Debug: Log response details
+                        logger.info(f"Response type: {type(table_response)}")
+                        logger.info(f"Response attributes: {[attr for attr in dir(table_response) if not attr.startswith('_')]}")
+                        
                         # Check if there are any errors in the response
                         if hasattr(table_response, 'mutated_entities') and table_response.mutated_entities:
-                            logger.info(f"Mutated entities: {table_response.mutated_entities}")
+                            logger.info(f"Mutated entities count: {len(table_response.mutated_entities)}")
+                            for i, entity in enumerate(table_response.mutated_entities[:3]):  # Log first 3
+                                logger.info(f"  Entity {i+1}: {getattr(entity, 'type_name', 'Unknown')} - {getattr(entity, 'name', 'No name')} (GUID: {getattr(entity, 'guid', 'No GUID')})")
                         
                         if hasattr(table_response, 'partial_updated_entities') and table_response.partial_updated_entities:
-                            logger.info(f"Partial updated entities: {table_response.partial_updated_entities}")
+                            logger.info(f"Partial updated entities count: {len(table_response.partial_updated_entities)}")
+                        
+                        if hasattr(table_response, 'guid_assignments') and table_response.guid_assignments:
+                            logger.info(f"GUID assignments count: {len(table_response.guid_assignments)}")
+                            # Log first few GUID assignments
+                            for i, (temp_guid, real_guid) in enumerate(list(table_response.guid_assignments.items())[:3]):
+                                logger.info(f"  Assignment {i+1}: {temp_guid} -> {real_guid}")
+                        
+                        # Check for errors
+                        if hasattr(table_response, 'errors') and table_response.errors:
+                            logger.error(f"Response errors: {table_response.errors}")
+                        else:
+                            logger.info("No errors in response")
                         
                         created_table_processes = []
-                        
-                        # Debug: Log response attributes
-                        logger.info(f"Response type: {type(table_response)}")
                         
                         # More robustly get all processes from the response, whether created or updated
                         if table_response:
                             try:
-                                created_assets = table_response.assets_created(asset_type=Process)
-                                updated_assets = table_response.assets_updated(asset_type=Process)
-                                created_table_processes.extend(created_assets)
-                                created_table_processes.extend(updated_assets)
+                                # Try different approaches to get the created processes
+                                logger.info("Attempting to retrieve created processes from response...")
                                 
-                                logger.info(f"Found {len(created_assets)} created and {len(updated_assets)} updated processes.")
+                                # Method 1: Try to get mutated entities directly
+                                try:
+                                    if hasattr(table_response, 'mutated_entities') and table_response.mutated_entities:
+                                        logger.info(f"Method 1 - Found {len(table_response.mutated_entities)} mutated entities")
+                                        for entity in table_response.mutated_entities:
+                                            if hasattr(entity, 'type_name') and entity.type_name == 'Process':
+                                                created_table_processes.append(entity)
+                                                logger.info(f"Found Process from mutated entities: {entity.name} (GUID: {entity.guid})")
+                                except Exception as method1_error:
+                                    logger.warning(f"Method 1 failed: {str(method1_error)}")
+                                
+                                # Method 2: Try guid_assignments
+                                if not created_table_processes and hasattr(table_response, 'guid_assignments'):
+                                    try:
+                                        logger.info(f"Method 2 - Found {len(table_response.guid_assignments)} GUID assignments")
+                                        # The guid_assignments contains mapping of temporary GUIDs to real GUIDs
+                                        # We need to search for the processes using the real GUIDs
+                                        real_guids = list(table_response.guid_assignments.values())
+                                        if real_guids:
+                                            logger.info(f"Searching for processes with GUIDs: {real_guids[:5]}...")  # Log first 5
+                                            for guid in real_guids:
+                                                try:
+                                                    asset = self.s3_connector.atlan_client.asset.get_by_guid(guid)
+                                                    if hasattr(asset, 'type_name') and asset.type_name == 'Process':
+                                                        created_table_processes.append(asset)
+                                                        logger.info(f"Found Process by GUID: {asset.name} (GUID: {asset.guid})")
+                                                except Exception as guid_error:
+                                                    logger.debug(f"GUID {guid} is not a Process: {str(guid_error)}")
+                                    except Exception as method2_error:
+                                        logger.warning(f"Method 2 failed: {str(method2_error)}")
+                                
+                                # Method 3: Search for recently created processes if other methods fail
+                                if not created_table_processes:
+                                    logger.info("Method 3 - Searching for recently created processes...")
+                                    try:
+                                        from pyatlan.model.fluent_search import FluentSearch
+                                        
+                                        # Wait a moment for the processes to be indexed
+                                        time.sleep(3)
+                                        
+                                        search_request = (
+                                            FluentSearch()
+                                            .where(FluentSearch.asset_type(Process))
+                                            .where(FluentSearch.active_assets())
+                                            .where(Process.CONNECTION_QUALIFIED_NAME.eq(lineage_connection_qn))
+                                        ).to_request()
+                                        
+                                        recent_processes = list(self.s3_connector.atlan_client.asset.search(search_request))
+                                        logger.info(f"Method 3 - Found {len(recent_processes)} processes in connection")
+                                        
+                                        # Filter for our processes by name pattern and recent creation
+                                        current_time = time.time()
+                                        for process in recent_processes:
+                                            if any(pattern in process.name for pattern in ["ETL:", "Extract:", "Load:"]):
+                                                # Check if process was created recently (within last 5 minutes)
+                                                if hasattr(process, 'create_time') and process.create_time:
+                                                    create_timestamp = process.create_time / 1000  # Convert from milliseconds
+                                                    if current_time - create_timestamp < 300:  # 5 minutes
+                                                        created_table_processes.append(process)
+                                                        logger.info(f"Found recent process: {process.name} (GUID: {process.guid})")
+                                                else:
+                                                    # If no create_time, assume it's recent since we just created it
+                                                    created_table_processes.append(process)
+                                                    logger.info(f"Found our process: {process.name} (GUID: {process.guid})")
+                                    except Exception as method3_error:
+                                        logger.error(f"Method 3 failed: {str(method3_error)}")
+                                
+                                # Method 4: Direct verification - search for processes by name
+                                if not created_table_processes:
+                                    logger.info("Method 4 - Direct search by process names...")
+                                    try:
+                                        # Wait a bit more for indexing
+                                        time.sleep(5)
+                                        
+                                        # Search for each process by name
+                                        for original_process in table_lineage_batch:
+                                            try:
+                                                search_request = (
+                                                    FluentSearch()
+                                                    .where(FluentSearch.asset_type(Process))
+                                                    .where(FluentSearch.active_assets())
+                                                    .where(Process.NAME.eq(original_process.name))
+                                                    .where(Process.CONNECTION_QUALIFIED_NAME.eq(lineage_connection_qn))
+                                                ).to_request()
+                                                
+                                                found_processes = list(self.s3_connector.atlan_client.asset.search(search_request))
+                                                if found_processes:
+                                                    found_process = found_processes[0]  # Take the first match
+                                                    created_table_processes.append(found_process)
+                                                    logger.info(f"Found process by name: {found_process.name} (GUID: {found_process.guid})")
+                                                else:
+                                                    logger.warning(f"Could not find process by name: {original_process.name}")
+                                            except Exception as name_search_error:
+                                                logger.error(f"Error searching for process {original_process.name}: {str(name_search_error)}")
+                                    except Exception as method4_error:
+                                        logger.error(f"Method 4 failed: {str(method4_error)}")
+                                
+                                # Method 5: Fallback - use the processes we sent for creation
+                                if not created_table_processes:
+                                    logger.info("Method 5 - Using original processes as fallback...")
+                                    # This is a fallback - we'll use the processes we created, but they won't have real GUIDs
+                                    # This might work for column lineage creation if the processes were actually saved
+                                    logger.warning("Using original process objects - column lineage may fail if GUIDs are not real")
+                                    created_table_processes = table_lineage_batch.copy()
+                                
                                 logger.info(f"Total table lineage processes to use: {len(created_table_processes)}")
-
+                                
                                 for process in created_table_processes:
-                                    logger.info(f"Retrieved table process: {process.name} (GUID: {process.guid})")
+                                    logger.info(f"Retrieved table process: {process.name} (GUID: {getattr(process, 'guid', 'No GUID')})")
+                                    
                             except Exception as response_error:
                                 logger.error(f"Error processing response: {str(response_error)}")
-                                # Try to get all assets from the response regardless of type
-                                try:
-                                    all_created = table_response.assets_created()
-                                    all_updated = table_response.assets_updated()
-                                    logger.info(f"All created assets: {len(all_created)}")
-                                    logger.info(f"All updated assets: {len(all_updated)}")
-                                    
-                                    # Filter for Process assets manually
-                                    for asset in all_created + all_updated:
-                                        if hasattr(asset, 'type_name') and asset.type_name == 'Process':
-                                            created_table_processes.append(asset)
-                                            logger.info(f"Found Process asset: {asset.name} (GUID: {asset.guid})")
-                                except Exception as fallback_error:
-                                    logger.error(f"Fallback response processing failed: {str(fallback_error)}")
+                                logger.error(f"Response type: {type(table_response)}")
+                                logger.error(f"Response attributes: {dir(table_response)}")
                         
                         # Phase 2b: Create column-level lineage processes if we have column info
                         if column_processes_info and created_table_processes:
@@ -162,21 +274,34 @@ class AtlanS3Pipeline:
                                     column_response = self.s3_connector.atlan_client.asset.save(column_lineage_batch)
                                     logger.info(f"Column lineage save response received")
                                     
-                                    if hasattr(column_response, 'assets_created'):
+                                    # Use the correct response handling as per sample code
+                                    try:
                                         from pyatlan.model.assets import ColumnProcess
-                                        created_column_processes = column_response.assets_created(asset_type=ColumnProcess)
-                                        logger.info(f"Successfully created {len(created_column_processes)} column lineage processes in Atlan")
+                                        created_column_processes = column_response.assets_created(ColumnProcess)
+                                        updated_columns = column_response.assets_updated(Column)
                                         
-                                        for process in created_column_processes:
-                                            logger.info(f"Created column process: {process.name} (GUID: {process.guid})")
-                                    else:
-                                        logger.warning("Column save response doesn't have assets_created method")
+                                        logger.info(f"Successfully created {len(created_column_processes)} column lineage processes in Atlan")
+                                        logger.info(f"Updated {len(updated_columns)} columns with lineage information")
+                                        
+                                        for i, process in enumerate(created_column_processes[:3]):  # Log first 3
+                                            logger.info(f"Created column process {i+1}: {process.name} (GUID: {process.guid})")
+                                            
+                                    except Exception as response_parse_error:
+                                        logger.warning(f"Could not parse column response using standard method: {str(response_parse_error)}")
+                                        # Fallback to checking mutated entities
+                                        if hasattr(column_response, 'mutated_entities') and column_response.mutated_entities:
+                                            logger.info(f"Fallback: Found {len(column_response.mutated_entities)} mutated entities")
+                                        elif hasattr(column_response, 'guid_assignments') and column_response.guid_assignments:
+                                            logger.info(f"Fallback: Found {len(column_response.guid_assignments)} GUID assignments")
                                         
                                 except Exception as e:
                                     logger.error(f"Failed to save column lineage processes: {str(e)}")
                                     logger.error(f"Error type: {type(e).__name__}")
                             else:
                                 logger.warning("No column lineage processes were created")
+                        elif column_processes_info and not created_table_processes:
+                            logger.warning(f"Have {len(column_processes_info)} column processes to create but no table processes found")
+                            logger.warning("This suggests the table lineage creation may have failed silently")
                         else:
                             logger.info("Skipping column lineage creation - no column info or table processes")
                             

@@ -54,3 +54,43 @@ export interface SaveDescriptionsRequest {
   source_type: string;
   columns: Column[];
 }
+
+export interface GlossaryTerm {
+  guid: string;
+  name: string;
+  qualified_name: string;
+  description?: string;
+  readme?: string;
+  category?: string;
+  type: 'term';
+}
+
+export interface GlossaryCategory {
+  guid: string;
+  name: string;
+  qualified_name: string;
+  description?: string;
+  readme?: string;
+  terms: GlossaryTerm[];
+  type: 'category';
+}
+
+export interface BusinessGlossaryResponse {
+  success: boolean;
+  categories: GlossaryCategory[];
+  terms: GlossaryTerm[];
+  error?: string;
+}
+
+export interface GenerateGlossaryReadmeRequest {
+  item_guid: string;
+  item_name: string;
+  item_type: 'term' | 'category';
+  current_description?: string;
+}
+
+export interface SaveGlossaryReadmeRequest {
+  item_guid: string;
+  item_type: 'term' | 'category';
+  readme: string;
+}

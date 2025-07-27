@@ -7,7 +7,6 @@ Handles S3 object discovery, metadata extraction, and asset creation
 import boto3
 import pandas as pd
 import logging
-import os
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 import asyncio
@@ -597,7 +596,7 @@ class S3Connector:
         compliance_tags: Dict[str, List[str]]
     ) -> None:
         """
-        Update assets with AI-generated insights
+        Update assets with AI-generated insights, PII classifications, and CIA ratings
         
         Args:
             assets: List of asset information
@@ -605,13 +604,13 @@ class S3Connector:
             pii_classifications: PII classification results
             compliance_tags: Compliance tags
         """
-        logger.info("Updating assets with AI insights")
+        logger.info("Updating assets with AI insights and PII classifications")
         
         for asset_info in assets:
             try:
                 asset_key = asset_info['metadata']['key']
                 
-                logger.info(f"Updating asset {asset_key} with AI insights")
+                logger.info(f"Updating asset {asset_key} with AI insights and PII classifications")
                 
                 # Get the asset to update
                 asset = asset_info['asset']
@@ -636,28 +635,66 @@ class S3Connector:
                 else:
                     logger.warning(f"No AI description found for {asset_key}")
                 
-                # PII logic commented out for now
-                # if asset_key in pii_classifications:
-                #     pii_info = pii_classifications[asset_key]
-                #     if pii_info.get('has_pii'):
-                #         logger.info(f"PII detected in {asset_key}: {pii_info.get('pii_types', [])}")
-                #         logger.info(f"PII confidence: {pii_info.get('confidence', 0):.2f}")
+                # Apply PII classification and CIA ratings if available
+                if asset_key in pii_classifications:
+                    pii_data = pii_classifications[asset_key]
+                    
+                    # Add PII information as custom metadata
+                    try:
+                        # Create a custom metadata structure for PII information
+                        pii_metadata = {
+                            "hasPII": "Yes" if pii_data.get('has_pii', False) else "No",
+                            "piiTypes": ", ".join(pii_data.get('pii_types', [])) if pii_data.get('pii_types') else "None",
+                            "sensitivityLevel": pii_data.get('sensitivity_level', 'Low'),
+                            "classificationDate": datetime.now().isoformat(),
+                            "classificationConfidence": str(pii_data.get('confidence', 0.0))
+                        }
+                        
+                        # Add sensitive columns if available
+                        if pii_data.get('sensitive_columns'):
+                            pii_metadata["sensitiveColumns"] = ", ".join(pii_data.get('sensitive_columns', []))
+                        
+                        # Store PII information in user_description instead of custom metadata
+                        # since custom_metadata_set might not be available in this version of the SDK
+                        pii_description = f"\n\nPII Classification:\n"
+                        pii_description += f"- Has PII: {'Yes' if pii_data.get('has_pii', False) else 'No'}\n"
+                        pii_description += f"- PII Types: {', '.join(pii_data.get('pii_types', [])) if pii_data.get('pii_types') else 'None'}\n"
+                        pii_description += f"- Sensitivity Level: {pii_data.get('sensitivity_level', 'Low')}\n"
+                        
+                        if pii_data.get('sensitive_columns'):
+                            pii_description += f"- Sensitive Columns: {', '.join(pii_data.get('sensitive_columns', []))}\n"
+                        
+                        # Apply CIA ratings if available
+                        if pii_data.get('cia_rating'):
+                            cia_rating = pii_data['cia_rating']
+                            pii_description += f"\nCIA Rating:\n"
+                            pii_description += f"- Confidentiality: {cia_rating.get('confidentiality', 'Low')}\n"
+                            pii_description += f"- Integrity: {cia_rating.get('integrity', 'Low')}\n"
+                            pii_description += f"- Availability: {cia_rating.get('availability', 'Low')}\n"
+                        
+                        # Append to existing description or set as new description
+                        if updater.user_description:
+                            updater.user_description += pii_description
+                        else:
+                            updater.user_description = pii_description
+                            
+                        updates_made.append("PII classification")
+                        logger.info(f"Setting PII classification for {asset_key}: {pii_data.get('pii_types', [])}")
+                        updates_made.append("CIA ratings")
+                        logger.info(f"Setting CIA ratings for {asset_key}: C={cia_rating.get('confidentiality', 'Low')}, I={cia_rating.get('integrity', 'Low')}, A={cia_rating.get('availability', 'Low')}")
+                        
+                    except Exception as pii_error:
+                        logger.error(f"Failed to apply PII classification to {asset_key}: {str(pii_error)}")
                 
-                # Apply compliance tags using the working method from parent directory
+                # Apply compliance tags using the tagging method
                 if asset_key in compliance_tags and compliance_tags[asset_key]:
                     try:
                         logger.info(f"Applying compliance tags to {asset_key}: {compliance_tags[asset_key]}")
-                        
-                        # Add the tags to the asset using the working method
-                        result = self.add_tags_to_asset(asset, compliance_tags[asset_key])
-                        if result:
-                            updates_made.append("compliance tags")
-                            logger.info(f"Successfully applied compliance tags to {asset_key}")
-                        else:
-                            logger.warning(f"No tags were applied to {asset_key}")
+                        self.add_tags_to_asset(asset, compliance_tags[asset_key])
+                        updates_made.append("compliance tags")
+                        logger.info(f"Successfully applied compliance tags to {asset_key}")
                     except Exception as tag_error:
                         logger.error(f"Failed to apply compliance tags to {asset_key}: {str(tag_error)}")
-                        # Continue with other updates even if tagging fails
                 
                 # Update the asset
                 if updates_made:

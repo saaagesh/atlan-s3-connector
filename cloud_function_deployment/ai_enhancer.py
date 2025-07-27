@@ -10,6 +10,7 @@ import google.generativeai as genai
 import json
 
 from config import AIConfig
+from pii_classifier import PIIClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,9 @@ class AIEnhancer:
     def __init__(self, config: AIConfig, atlan_client=None):
         self.config = config
         self.atlan_client = atlan_client
+        
+        # Initialize PII classifier if Atlan client is provided
+        self.pii_classifier = PIIClassifier(atlan_client) if atlan_client else None
         
         # Initialize Gemini model if API key is provided
         if config.google_api_key and config.google_api_key != "your-google-api-key":
@@ -240,7 +244,7 @@ class AIEnhancer:
                                     'compliance_tags': compliance_tags
                                 }
                                 
-                                logger.info(f"PII classification for {asset_name}: {pii_types}")
+                                logger.info(f"PII classification for {asset_name}: {pii_types} (Sensitivity: {'Medium' if has_pii else 'Low'})")
                             else:
                                 logger.warning(f"No classification data found in AI response for {asset_name}")
                                 pii_classifications[asset_name] = {
@@ -276,7 +280,37 @@ class AIEnhancer:
                         'sensitive_columns': []
                     }
         else:
-            logger.warning("No AI model available for PII classification")
+            # Fallback to rule-based classification if AI model is not available
+            if self.pii_classifier:
+                for asset in assets:
+                    asset_name = asset['metadata']['key']
+                    try:
+                        # Use rule-based classification
+                        classification = self.pii_classifier.detect_pii_rule_based(asset)
+                        
+                        # Convert to dictionary for storage
+                        pii_classifications[asset_name] = {
+                            'has_pii': classification.has_pii,
+                            'pii_types': classification.pii_types,
+                            'sensitivity_level': classification.sensitivity_level,
+                            'confidence': classification.confidence,
+                            'cia_rating': {
+                                'confidentiality': classification.cia_rating.confidentiality.value,
+                                'integrity': classification.cia_rating.integrity.value,
+                                'availability': classification.cia_rating.availability.value
+                            },
+                            'sensitive_columns': classification.sensitive_columns
+                        }
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to classify PII for {asset_name} using rule-based approach: {str(e)}")
+                        pii_classifications[asset_name] = {
+                            'has_pii': False,
+                            'pii_types': [],
+                            'confidence': 0.0
+                        }
+            else:
+                logger.warning("No PII classification method available (neither AI nor rule-based)")
         
         return pii_classifications
 
@@ -300,8 +334,19 @@ class AIEnhancer:
                     logger.info(f"Using pre-determined compliance tags for {asset_name}: {pii_data['compliance_tags']}")
                     continue
             
-            # If AI model is available, use AI-based approach
-            if self.model:
+            # If we have a PII classifier, use it to determine compliance tags
+            if self.pii_classifier:
+                try:
+                    # Use rule-based classification to determine tags
+                    classification = self.pii_classifier.detect_pii_rule_based(asset)
+                    compliance_tags[asset_name] = self.pii_classifier._determine_compliance_tags(classification)
+                    logger.info(f"Generated compliance tags using rule-based approach for {asset_name}: {compliance_tags[asset_name]}")
+                except Exception as e:
+                    logger.error(f"Failed to generate compliance tags for {asset_name} using rule-based approach: {str(e)}")
+                    compliance_tags[asset_name] = []
+            
+            # If AI model is available and we don't have tags yet, use AI-based approach
+            elif self.model and (asset_name not in compliance_tags or not compliance_tags[asset_name]):
                 schema_info = asset['metadata'].get('schema_info', {})
                 columns = schema_info.get('columns', [])
                 
@@ -329,7 +374,7 @@ class AIEnhancer:
                 compliance_tags[asset_name] = tags
                 logger.info(f"Generated compliance tags using AI-based approach for {asset_name}: {tags}")
             
-            # Fallback if AI is not available
+            # Fallback if neither classifier nor AI is available
             else:
                 compliance_tags[asset_name] = []
         

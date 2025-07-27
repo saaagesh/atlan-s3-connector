@@ -758,3 +758,155 @@ async def debug_column_descriptions():
 
 if __name__ == '__main__':
     app.run(debug=True, port=5001)
+
+@app.route('/api/business_glossary', methods=['GET'])
+async def get_business_glossary():
+    """Fetch all business glossary categories and terms using FluentSearch."""
+    try:
+        app.logger.info("Fetching business glossary data using FluentSearch")
+        
+        # Search for glossary terms using FluentSearch
+        from pyatlan.model.enums import AtlanTypeCategory
+        
+        # First, let's try to find glossary-related assets
+        # We'll search for assets that might be glossary terms or categories
+        search_request = (
+            FluentSearch()
+            .where(FluentSearch.active_assets())
+            .page_size(100)  # Get more results
+        ).to_request()
+        
+        all_results = list(atlan_client.asset.search(search_request))
+        app.logger.info(f"Found {len(all_results)} total assets")
+        
+        # Filter for glossary-related assets
+        glossary_terms = []
+        glossary_categories = []
+        
+        for asset in all_results:
+            asset_type = getattr(asset, 'type_name', '')
+            app.logger.debug(f"Asset type: {asset_type}, name: {getattr(asset, 'name', 'Unknown')}")
+            
+            # Look for glossary terms and categories based on type name
+            if 'glossary' in asset_type.lower() or 'term' in asset_type.lower():
+                if 'category' in asset_type.lower():
+                    category_data = {
+                        "guid": asset.guid,
+                        "name": asset.name,
+                        "qualified_name": getattr(asset, 'qualified_name', ''),
+                        "description": getattr(asset, 'description', '') or getattr(asset, 'user_description', ''),
+                        "readme": getattr(asset, 'readme', '') or '',
+                        "type": "category",
+                        "terms": [],
+                        "glossary_name": "Default"
+                    }
+                    glossary_categories.append(category_data)
+                else:
+                    term_data = {
+                        "guid": asset.guid,
+                        "name": asset.name,
+                        "qualified_name": getattr(asset, 'qualified_name', ''),
+                        "description": getattr(asset, 'description', '') or getattr(asset, 'user_description', ''),
+                        "readme": getattr(asset, 'readme', '') or '',
+                        "type": "term",
+                        "category": None,
+                        "glossary_name": "Default"
+                    }
+                    glossary_terms.append(term_data)
+        
+        app.logger.info(f"Found {len(glossary_categories)} categories and {len(glossary_terms)} terms")
+        
+        # If no glossary items found, create some sample data for testing
+        if len(glossary_categories) == 0 and len(glossary_terms) == 0:
+            app.logger.info("No glossary items found, returning empty structure")
+            return jsonify({
+                "success": True,
+                "categories": [],
+                "terms": [],
+                "message": "No business glossary items found. Create some terms and categories in Atlan first."
+            })
+        
+        return jsonify({
+            "success": True,
+            "categories": glossary_categories,
+            "terms": glossary_terms
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error fetching business glossary: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/generate_glossary_readme', methods=['POST'])
+async def generate_glossary_readme():
+    """Generate AI-powered README for a glossary term or category."""
+    try:
+        data = request.json
+        item_guid = data.get('item_guid')
+        item_name = data.get('item_name')
+        item_type = data.get('item_type')
+        current_description = data.get('current_description', '')
+        
+        if not item_guid or not item_name or not item_type:
+            return jsonify({"success": False, "error": "Missing required parameters"}), 400
+        
+        app.logger.info(f"Generating README for {item_type}: {item_name}")
+        
+        ai_enhancer = AIEnhancer(ai_config)
+        
+        # Create payload for AI generation
+        payload = {
+            'name': item_name,
+            'type': item_type,
+            'description': current_description,
+            'guid': item_guid
+        }
+        
+        # Generate README content
+        readme_content = await ai_enhancer.generate_glossary_readme(payload)
+        
+        app.logger.info(f"Successfully generated README for {item_name}")
+        
+        return jsonify({
+            "success": True,
+            "readme": readme_content
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error generating glossary README: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/save_glossary_readme', methods=['POST'])
+async def save_glossary_readme():
+    """Save README content to a glossary term or category."""
+    try:
+        data = request.json
+        item_guid = data.get('item_guid')
+        item_type = data.get('item_type')
+        readme_content = data.get('readme')
+        
+        if not item_guid or not item_type or not readme_content:
+            return jsonify({"success": False, "error": "Missing required parameters"}), 400
+        
+        app.logger.info(f"Saving README for {item_type}: {item_guid}")
+        
+        # For now, we'll return a success message since the exact glossary update API
+        # depends on the specific Atlan SDK version and setup
+        # In a real implementation, you would use the appropriate Atlan client method
+        # to update the glossary term or category
+        
+        app.logger.info(f"README content to save: {readme_content[:100]}...")
+        
+        # TODO: Implement actual glossary update when proper SDK methods are available
+        # This would typically involve:
+        # 1. Finding the glossary item by GUID
+        # 2. Updating its README field
+        # 3. Saving the changes back to Atlan
+        
+        return jsonify({
+            "success": True,
+            "message": "README saved successfully (placeholder implementation)"
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error saving glossary README: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500

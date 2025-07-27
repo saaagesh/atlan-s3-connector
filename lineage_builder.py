@@ -131,7 +131,7 @@ class LineageBuilder:
     def _create_rich_column_mapping_description(self, pg_columns: List[Column], sf_columns: List[Column], 
                                               s3_columns: List[Dict], table_name: str) -> str:
         """
-        Create a rich description showing detailed column mappings for demo purposes.
+        Create a rich description showing detailed column mappings
         
         Args:
             pg_columns: PostgreSQL columns
@@ -191,10 +191,10 @@ class LineageBuilder:
 
     def cleanup_existing_lineage(self, connection_qn: str) -> int:
         """
-        Clean up existing lineage processes for this S3 connection to make the script idempotent.
+        Clean up existing lineage processes for this connection to make the script idempotent.
         
         Args:
-            connection_qn: S3 connection qualified name
+            connection_qn: Connection qualified name where lineage processes are stored
             
         Returns:
             Number of processes cleaned up
@@ -202,7 +202,7 @@ class LineageBuilder:
         logger.info(f"Cleaning up existing lineage processes for connection: {connection_qn}")
         
         try:
-            # Search for existing Process assets related to this S3 connection
+            # Search for existing Process assets related to this connection
             request = (
                 FluentSearch()
                 .where(FluentSearch.asset_type(Process))
@@ -256,6 +256,9 @@ class LineageBuilder:
         # Store column processes to create after table processes are saved
         column_processes_to_create = []
         
+        # Store the connection qualified name for column processes
+        lineage_connection_qn = connection_qn
+        
         # Process each S3 asset and create lineage connections through them
         for s3_asset_info in s3_assets:
             s3_asset = s3_asset_info['asset']
@@ -265,49 +268,74 @@ class LineageBuilder:
             table_name = s3_metadata['key'].split('.')[0].upper()
             s3_columns = s3_metadata.get('schema_info', {}).get('columns', [])
             
-            logger.info(f"Processing S3 asset: {s3_asset.name} -> Table: {table_name}")
+            logger.info(f"Processing S3 asset: {s3_asset.name} -> Looking for table: {table_name}")
             logger.info(f"S3 columns found: {len(s3_columns)}")
             
+            # Debug: Show available tables if not found
             pg_table = self._get_postgres_table(table_name)
             sf_table = self._get_snowflake_table(table_name)
             
             logger.info(f"PostgreSQL table found: {pg_table.name if pg_table else 'None'}")
             logger.info(f"Snowflake table found: {sf_table.name if sf_table else 'None'}")
             
+            # If tables not found, show what's available
+            if not pg_table and self.postgres_tables:
+                logger.info(f"Available PostgreSQL tables: {[t.name for t in self.postgres_tables[:10]]}")
+            if not sf_table and self.snowflake_tables:
+                logger.info(f"Available Snowflake tables: {[t.name for t in self.snowflake_tables[:10]]}")
+            
             # Create lineage if we have both tables and the S3 object
+            logger.info(f"Checking assets for {table_name}:")
+            logger.info(f"  pg_table: {pg_table is not None}")
+            logger.info(f"  sf_table: {sf_table is not None}")  
+            logger.info(f"  s3_asset: {s3_asset is not None}")
+            
             if pg_table and sf_table and s3_asset:
+                logger.info(f"All required assets found for {table_name} - proceeding with lineage creation")
+                
                 pg_columns = self._get_table_columns(pg_table, "postgres")
                 sf_columns = self._get_table_columns(sf_table, "snowflake")
                 
                 logger.info(f"PostgreSQL columns: {len(pg_columns)}")
                 logger.info(f"Snowflake columns: {len(sf_columns)}")
                 
-                # Debug: Log table GUIDs
-                logger.info(f"PostgreSQL table GUID: {pg_table.guid}")
-                logger.info(f"Snowflake table GUID: {sf_table.guid}")
-                logger.info(f"S3 asset GUID: {s3_asset.guid}")
+                # Debug: Log table GUIDs and qualified names
+                logger.info(f"PostgreSQL table GUID: {pg_table.guid}, QN: {pg_table.qualified_name}")
+                logger.info(f"Snowflake table GUID: {sf_table.guid}, QN: {sf_table.qualified_name}")
+                logger.info(f"S3 asset GUID: {s3_asset.guid}, QN: {s3_asset.qualified_name}")
 
                 # Create a consolidated process for PostgreSQL -> Snowflake (for business lineage)
-                e2e_process = Process.creator(
-                    name=f"ETL: {pg_table.name} → {sf_table.name}",
-                    connection_qualified_name=connection_qn,
-                    # process_id attribute is not supported in this version of the SDK
-                    # process_id=f"e2e_{table_name}",
-                    inputs=[Table.ref_by_guid(guid=pg_table.guid)],
-                    outputs=[Table.ref_by_guid(guid=sf_table.guid)]
-                )
-                e2e_process.description = f"End-to-end lineage from {pg_table.name} to {sf_table.name}, intermediated by S3."
-                lineage_batch.append(e2e_process)
-                logger.info(f"Created end-to-end process for {table_name} with process_id: e2e_{table_name}")
+                try:
+                    logger.info(f"Creating end-to-end process with connection: {connection_qn}")
+                    
+                    e2e_process = Process.creator(
+                        name=f"ETL: {pg_table.name} → {sf_table.name}",
+                        connection_qualified_name=connection_qn,
+                        inputs=[Table.ref_by_qualified_name(qualified_name=pg_table.qualified_name)],
+                        outputs=[Table.ref_by_qualified_name(qualified_name=sf_table.qualified_name)]
+                    )
+                    
+                    # Set additional attributes
+                    e2e_process.description = f"End-to-end lineage from {pg_table.name} to {sf_table.name}, intermediated by S3."
+                    e2e_process.sql = f"-- ETL process from {pg_table.name} to {sf_table.name} via S3"
+                    
+                    # Debug: Log process details
+                    logger.info(f"Process name: {e2e_process.name}")
+                    logger.info(f"Process connection: {e2e_process.connection_qualified_name}")
+                    
+                    lineage_batch.append(e2e_process)
+                    logger.info(f"Created end-to-end process for {table_name}")
+                except Exception as e:
+                    logger.error(f"Error creating end-to-end process for {table_name}: {str(e)}")
+                    logger.error(f"Error type: {type(e).__name__}")
+                    continue
                 
                 # Create PostgreSQL → S3 process
                 pg_to_s3_process = Process.creator(
                     name=f"Extract: {pg_table.name} → {s3_asset.name}",
                     connection_qualified_name=connection_qn,
-                    # process_id attribute is not supported in this version of the SDK
-                    # process_id=f"extract_{table_name}_to_s3",
-                    inputs=[Table.ref_by_guid(guid=pg_table.guid)],
-                    outputs=[S3Object.ref_by_guid(guid=s3_asset.guid)]
+                    inputs=[Table.ref_by_qualified_name(qualified_name=pg_table.qualified_name)],
+                    outputs=[S3Object.ref_by_qualified_name(qualified_name=s3_asset.qualified_name)]
                 )
                 
                 pg_to_s3_process.description = f"Extract data from PostgreSQL {pg_table.name} to S3 object {s3_asset.name}"
@@ -323,10 +351,8 @@ SELECT * FROM {pg_table.name};
                 s3_to_sf_process = Process.creator(
                     name=f"Load: {s3_asset.name} → {sf_table.name}",
                     connection_qualified_name=connection_qn,
-                    # process_id attribute is not supported in this version of the SDK
-                    # process_id=f"load_s3_to_{table_name}",
-                    inputs=[S3Object.ref_by_guid(guid=s3_asset.guid)],
-                    outputs=[Table.ref_by_guid(guid=sf_table.guid)]
+                    inputs=[S3Object.ref_by_qualified_name(qualified_name=s3_asset.qualified_name)],
+                    outputs=[Table.ref_by_qualified_name(qualified_name=sf_table.qualified_name)]
                 )
                 
                 s3_to_sf_process.description = f"Load data from S3 object {s3_asset.name} to Snowflake table {sf_table.name}"
@@ -373,7 +399,7 @@ FILE_FORMAT = (TYPE = 'CSV' FIELD_DELIMITER = ',' SKIP_HEADER = 1);"""
                                     's3_asset': s3_asset,
                                     'pg_table': pg_table,
                                     'sf_table': sf_table,
-                                    'connection_qn': self.connection_config.postgres_connection_qn
+                                    'connection_qn': lineage_connection_qn
                                 })
                             else:
                                 logger.warning(f"No Snowflake mapping found for S3 column: {s3_col_name}")
@@ -385,7 +411,15 @@ FILE_FORMAT = (TYPE = 'CSV' FIELD_DELIMITER = ',' SKIP_HEADER = 1);"""
                         logger.warning(f"SF mappings empty: {len(sf_mappings) == 0}")
                 
             else:
-                logger.warning(f"Missing PostgreSQL, Snowflake table, or S3 asset for {table_name} - skipping lineage")
+                logger.warning(f"Missing required assets for {table_name} - skipping lineage")
+                logger.warning(f"  PostgreSQL table: {'Found' if pg_table else 'NOT FOUND'}")
+                logger.warning(f"  Snowflake table: {'Found' if sf_table else 'NOT FOUND'}")
+                logger.warning(f"  S3 asset: {'Found' if s3_asset else 'NOT FOUND'}")
+                
+                if not pg_table:
+                    logger.warning(f"  Available PostgreSQL tables: {[t.name for t in self.postgres_tables[:5]]}")
+                if not sf_table:
+                    logger.warning(f"  Available Snowflake tables: {[t.name for t in self.snowflake_tables[:5]]}")
 
             # Log summary of lineage created for this S3 asset
             logger.info(f"Completed lineage preparation for S3 asset: {s3_asset.name} (table: {table_name})")
@@ -425,14 +459,11 @@ FILE_FORMAT = (TYPE = 'CSV' FIELD_DELIMITER = ',' SKIP_HEADER = 1);"""
                 logger.info(f"Creating column lineage: {col_info['pg_column'].name} → {col_info['sf_column'].name} (parent: {parent_process.guid})")
                 
                 # Create column-level lineage process with parent table process
-                # Note: S3 is not included in the lineage connections
                 column_process = ColumnProcess.creator(
                     name=f"{col_info['pg_column'].name} → {col_info['sf_column'].name}",
                     connection_qualified_name=col_info['connection_qn'],
-                    # process_id attribute is not supported in this version of the SDK
-                    # process_id=f"col_lineage_{col_info['table_name']}_{col_info['pg_column'].name}_{col_info['sf_column'].name}",
-                    inputs=[Column.ref_by_guid(guid=col_info['pg_column'].guid)],
-                    outputs=[Column.ref_by_guid(guid=col_info['sf_column'].guid)],
+                    inputs=[Column.ref_by_qualified_name(qualified_name=col_info['pg_column'].qualified_name)],
+                    outputs=[Column.ref_by_qualified_name(qualified_name=col_info['sf_column'].qualified_name)],
                     parent=Process.ref_by_guid(guid=parent_process.guid)
                 )
                 
